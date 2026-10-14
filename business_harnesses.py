@@ -125,7 +125,19 @@ class PaperHarness(BusinessHarness):
         context = replace(self.context, client=self.shared.model, progress=self.shared.progress,
                           cancellation=self.shared.cancellation)
         result = summarize_paper(self.parameters, context)
+        source=result.pop("_pdf_path",None)
         result.update(self.shared.save_markdown(result["title"], result["markdown"], self.role))
+        if source:
+            import shutil
+            from storage_layout import atomic_text
+            path=Path(result["path"])
+            assets=path.with_name(path.stem+"_assets");assets.mkdir(mode=0o700,exist_ok=True)
+            self.shared.cancellation.check()
+            shutil.copyfile(source,assets/"original.pdf")
+            (assets/"original.pdf").chmod(0o600)
+            result["markdown"] += "\n\n[查看原始 PDF]("+assets.name+"/original.pdf)\n"
+            atomic_text(path,result["markdown"])
+
         return result
 
     def verify(self):

@@ -8,6 +8,12 @@ from runtime_control import RunCancelled
 
 
 def run_business_subagent(capability_id, parameters, context):
+    from harness import skill_snapshot
+    with skill_snapshot(context.settings):
+        return _run_business_subagent(capability_id, parameters, context)
+
+
+def _run_business_subagent(capability_id, parameters, context):
     harness = BUSINESS_HARNESSES[capability_id](parameters, context)
     shared = harness.shared
     messages = [{"role": "system", "content": harness.instructions()},
@@ -44,7 +50,8 @@ def run_business_subagent(capability_id, parameters, context):
                 except RunCancelled:
                     raise
                 except Exception as exc:
-                    detail = str(exc).replace(shared.settings.api_key, "[已隐藏凭证]") if shared.settings.api_key else str(exc)
+                    from agent_profiles import redact
+                    detail = redact(shared.settings, exc)
                     result = {"success": False, "error": detail[:1200]}
                     shared.trace("tool_failed", name=function.get("name", ""), error=detail[:1200])
                     if function.get("name") == "produce_result":
@@ -64,5 +71,6 @@ def run_business_subagent(capability_id, parameters, context):
         shared.trace("cancelled")
         raise
     except Exception as exc:
-        shared.trace("failed", error=str(exc)[:1200])
+        from agent_profiles import redact
+        shared.trace("failed", error=redact(shared.settings, exc)[:1200])
         raise

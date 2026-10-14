@@ -2,6 +2,8 @@
 """Reusable local runtime shared by agent capabilities."""
 
 import importlib
+import contextvars
+from contextlib import contextmanager
 import io
 import json
 import logging
@@ -26,6 +28,17 @@ DEFAULT_MODEL = "deepseek-flash"
 DEFAULT_DATA_HOME = Path.home() / ".minimal-agent"
 PROJECT_DIR = Path(__file__).resolve().parent
 SKILLS_DIR = PROJECT_DIR / "skills"
+_SKILL_CONTEXT = contextvars.ContextVar("skill_snapshot", default={})
+
+@contextmanager
+def skill_snapshot(settings):
+    role = getattr(settings, "_profile_role", None)
+    marker = _SKILL_CONTEXT.set({role: settings.skill_instructions} if role else {})
+    try:
+        yield
+    finally:
+        _SKILL_CONTEXT.reset(marker)
+
 
 
 def load_skill_instructions(capability: str) -> str:
@@ -34,6 +47,9 @@ def load_skill_instructions(capability: str) -> str:
     Call once at the beginning of a task so edits apply to the next task and
     all stages within the current task use the same instruction snapshot.
     """
+    snapshot = _SKILL_CONTEXT.get()
+    if capability in snapshot:
+        return snapshot[capability]
     config_path = SKILLS_DIR / "config.json"
     try:
         config = json.loads(config_path.read_text(encoding="utf-8"))

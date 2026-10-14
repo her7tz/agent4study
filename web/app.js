@@ -6,7 +6,7 @@
   const escapeHTML = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const state = { status: null, capabilities: [], tasks: [], reports: [], jobs: [], runs: [], view: 'chat', currentTask: null, currentTaskId: null, activeReport: null, historyFilter: 'all', pollTimer: null, polling: false, connected: false, submitting: false, loading: false, resultVersion: 0, resultSignature: '', resultDownloadUrl: null, exportReady: false, exporting: false, scheduleSignature: '', scheduleDrafts: {}, conversationId: null, messages: [], chatBusy: false };
   const activeStatuses = new Set(['queued', 'running']);
-  const statusNames = { queued: '等待处理', running: '处理中', completed: '已完成', failed: '执行失败', interrupted: '已中断', cancelled: '已取消', missed: '已跳过', deleted: '已移入回收站' };
+  const statusNames = { queued: '等待处理', running: '处理中', completed: '已完成', failed: '执行失败', interrupted: '已中断', waiting_user: '等待论文材料', cancelled: '已取消', missed: '已跳过', deleted: '已移入回收站' };
   Object.assign(state, {conversations: [], chatRunId: null, watchGeneration: 0, chatSources: [], conversationEdit: null});
   Object.assign(state, {conversationScope:'active', conversationArchived:false, knowledgeJobs:[], knowledgePollTimer:null, knowledgeEntry:null, chatAttachment:null, chatUploading:false, paperSubmitting:false, resultHome:'video'});
   const dateFormat = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
@@ -17,7 +17,7 @@
     return (full ? fullDateFormat : dateFormat).format(new Date(Number(value) * 1000));
   }
   function statusPill(status) {
-    const kind = status === 'completed' ? 'is-success' : activeStatuses.has(status) ? 'is-active' : status === 'missed' ? 'is-warning' : 'is-failed';
+    const kind = status === 'completed' ? 'is-success' : activeStatuses.has(status) ? 'is-active' : ['missed','waiting_user'].includes(status) ? 'is-warning' : 'is-failed';
     return `<span class="status-pill ${kind}">${escapeHTML(statusNames[status] || status || '未知')}</span>`;
   }
   function emptyState(title, detail, icon = 'leaf') {
@@ -525,12 +525,15 @@
             } catch {}
             continue;
           }
-          if (!['task', 'schedule', 'note', 'deleted', 'knowledge'].includes(action.type)) continue;
+          if (!['task', 'schedule', 'note', 'deleted', 'knowledge','agent_settings','workspace_panel','account_session'].includes(action.type)) continue;
           const button = document.createElement('button');
           button.type = 'button';
           button.className = 'button button-secondary button-small';
           const title = action.title || capabilityInfo(action.capability)?.title || '任务';
-          if (action.type === 'knowledge' && action.entry_id) {
+          if(action.type==='agent_settings'){button.dataset.agentSettings=action.role||'global';button.textContent='配置 Agent';}
+          else if(action.type==='workspace_panel'){button.dataset.workspacePanel=action.panel;button.textContent=action.title||'打开操作';}
+          else if(action.type==='account_session'){button.dataset.accountSession=action.session_id;button.textContent='账号与论文材料';}
+          else if (action.type === 'knowledge' && action.entry_id) {
             button.dataset.knowledgeOpen=action.entry_id;button.textContent=`${title} · 参考知识`;
           } else if (action.type === 'task' && action.task_id) {
             button.dataset.openTask = action.task_id;
@@ -547,7 +550,14 @@
             button.textContent = `${title} · 恢复内容`;
           } else continue;
           actions.append(button);
-          if (action.type === 'task' && activeStatuses.has(state.tasks.find(item => item.id === action.task_id)?.status)) {
+          if(action.type==='task'){
+            const task=state.tasks.find(t=>t.id===action.task_id);
+            if(task){const detail=document.createElement('small');detail.className='task-inline-stage';detail.textContent=task.error||task.stage||'';actions.append(detail);
+              if(task.status==='waiting_user'&&task.session_id){const login=document.createElement('button');login.className='text-button';login.dataset.accountSession=task.session_id;login.textContent='登录并获取论文';actions.append(login);}
+              if(task.capability==='paper_summary'&&['waiting_user','failed','interrupted'].includes(task.status)){const upload=document.createElement('button');upload.className='text-button';upload.dataset.taskMaterial=task.id;upload.textContent='上传 PDF 继续原任务';actions.append(upload);}
+            }
+          }
+          if (action.type === 'task' && ['queued','running','waiting_user'].includes(state.tasks.find(item => item.id === action.task_id)?.status)) {
             const cancel = document.createElement('button'); cancel.className = 'text-button'; cancel.type = 'button';
             cancel.dataset.cancelTask = action.task_id; cancel.textContent = '取消任务'; actions.append(cancel);
           }
@@ -917,7 +927,7 @@
     ensurePolling();
   }
   function ensurePolling() {
-    const hasActive = state.tasks.some((task) => activeStatuses.has(task.status)) || state.runs.some((run) => activeStatuses.has(run.status));
+    const hasActive = state.tasks.some((task) => activeStatuses.has(task.status) || task.status==='waiting_user') || state.runs.some((run) => activeStatuses.has(run.status));
     const hasScheduled = state.jobs.some((job) => job.enabled);
     if (!hasActive && !hasScheduled) {
       clearTimeout(state.pollTimer);
@@ -931,6 +941,7 @@
     state.polling = true;
     try {
       const before = new Set(state.tasks.filter((task) => activeStatuses.has(task.status)).map((task) => task.id));
+      const previousTasks=new Map(state.tasks.map(task=>[task.id,task.status+':'+task.stage+':'+task.attempt]));
       const previousRuns = new Map(state.runs.map((run) => [run.id, run.status]));
       const [data, schedules] = await Promise.all([api('/api/tasks'), api('/api/schedules')]);
       state.jobs = schedules.jobs || [];
@@ -938,8 +949,9 @@
       renderSchedules();
       state.tasks = Array.isArray(data.tasks) ? data.tasks : [];
       const completed = state.tasks.filter((task) => before.has(task.id) && !activeStatuses.has(task.status));
-      if (state.currentTaskId && before.has(state.currentTaskId) && !state.activeReport) await openTask(state.currentTaskId);
+      if(state.currentTaskId&&state.currentTask)state.currentTask=state.tasks.find(task=>task.id===state.currentTaskId)||state.currentTask;
       renderTasks();
+      if(state.tasks.some(task=>task.conversation_id===state.conversationId&&previousTasks.get(task.id)!==task.status+':'+task.stage+':'+task.attempt)||state.runs.some(run=>previousRuns.get(run.id)!==run.status))await refreshConversation();
       if (completed.length || state.runs.some((run) => run.status === 'completed' && previousRuns.get(run.id) !== 'completed')) {
         const reports = await api('/api/reports');
         state.reports = reports.reports || [];
@@ -1036,8 +1048,8 @@
       renderTasks();
       if (!state.currentTaskId) {
         const activeTask = state.tasks.find((task) => activeStatuses.has(task.status));
-        if (activeTask) await openTask(activeTask.id);
-      } else if (!state.activeReport) await openTask(state.currentTaskId);
+        if (activeTask) state.currentTaskId=activeTask.id;
+      } else state.currentTask=state.tasks.find(task=>task.id===state.currentTaskId)||state.currentTask;
       const failed = results.find((result) => result.status === 'rejected');
       if (failed) toast(`部分记录暂时无法读取：${failed.reason.message}`, true);
       else if (showSuccess) toast('已刷新本地状态');
@@ -1053,38 +1065,13 @@
   }
 
   async function setView(view, reload = true) {
-    if (!['chat', 'knowledge', 'video', 'paper', 'schedules', 'history', 'settings'].includes(view)) view = 'chat';
-    state.view = view;
-    const labels = { chat: '与 Agent 对话', knowledge:'个人知识库', video: '视频总结', paper:'论文总结', schedules: '定时任务', history: '运行记录', settings: '模型设置' };
-    document.querySelectorAll('.view').forEach((element) => { element.hidden = element.id !== `view-${view}`; });
-    document.querySelectorAll('.nav-item').forEach((element) => {
-      const selected = element.dataset.view === view;
-      element.classList.toggle('is-active', selected);
-      if (selected) element.setAttribute('aria-current', 'page'); else element.removeAttribute('aria-current');
-    });
-    $('breadcrumb-page').textContent = labels[view];
-    document.title = `${labels[view]} · Agent 工作台`;
-    history.replaceState(null, '', `#${view}`);
-    const heading = $(`view-${view}`).querySelector('h1');
-    heading?.focus({ preventScroll: true });
-    if (reload) {
-      try {
-        const status = await api('/api/status');
-        state.status = status;
-        setConnection(true);
-        renderStatus();
-        if (view === 'schedules' || view === 'history') await refreshSchedules();
-        if (view === 'chat') await Promise.all([refreshConversation(), refreshLibrary()]);
-        if (view === 'knowledge') await refreshKnowledge();
-        if (view === 'history' || view === 'video' || view === 'paper') {
-          const [tasks, reports] = await Promise.all([api('/api/tasks'), api('/api/reports')]);
-          state.tasks = tasks.tasks || [];
-          state.reports = reports.reports || [];
-          renderReports();
-          renderTasks();
-        }
-      } catch (error) { setConnection(false, error.message); }
-    }
+    state.view='chat';$('view-chat').hidden=false;
+    document.querySelectorAll('.nav-item').forEach(node=>{node.classList.add('is-active');node.setAttribute('aria-current','page');});
+    $('breadcrumb-page').textContent='与 Agent 对话';document.title='与 Agent 对话 · Agent 工作台';history.replaceState(null,'','#chat');
+    try{
+      if(view&&view!=='chat')await AgentControls.panel(view);
+      else if(reload)await Promise.all([refreshConversation(),refreshLibrary()]);
+    }catch(error){toast(error.message,true);}
   }
 
   function validateVideoLink(input) {
@@ -1179,7 +1166,7 @@
       const time = $('schedule-time').value.replace('T', ' ');
       if (!time) throw new Error('请选择执行时间。');
       button.disabled = true;
-      await api('/api/schedules', 'POST', { capability, parameters, cadence, time });
+      await api('/api/schedules', 'POST', { capability, parameters, cadence, time, conversation_id:state.conversationId });
       await refreshSchedules();
       toast('定时任务已安排');
     } catch (error) { inlineError('schedule-error', error.message); }
@@ -1202,6 +1189,10 @@
     const detailButton = event.target.closest('[data-run-detail]');
     const disableButton = event.target.closest('[data-disable-job]');
     try {
+      const config=event.target.closest('[data-agent-settings]');if(config){await AgentControls.profiles(config.dataset.agentSettings);return;}
+      const panel=event.target.closest('[data-workspace-panel]');if(panel){await AgentControls.panel(panel.dataset.workspacePanel);return;}
+      const session=event.target.closest('[data-account-session]');if(session){await AgentControls.session(session.dataset.accountSession);return;}
+      const material=event.target.closest('[data-task-material]');if(material){state.materialTaskId=material.dataset.taskMaterial;materialInput.click();return;}
       const artifactOpen = event.target.closest('[data-artifact-open]');
       const artifactDelete = event.target.closest('[data-artifact-delete]');
       const artifactRestore = event.target.closest('[data-artifact-restore]');
@@ -1381,10 +1372,19 @@
   window.addEventListener('pagehide', () => { clearTimeout(state.pollTimer); state.pollTimer = null; clearTimeout(state.knowledgePollTimer);state.knowledgePollTimer=null; });
   window.addEventListener('pageshow', ensurePolling);
   window.addEventListener('pageshow', ensureKnowledgePolling);
+  const materialInput=document.createElement('input');materialInput.type='file';materialInput.accept='application/pdf,.pdf';materialInput.hidden=true;document.body.append(materialInput);
+  materialInput.addEventListener('change',async()=>{const taskId=state.materialTaskId,file=materialInput.files[0];materialInput.value='';if(!file||!taskId)return;
+    try{const paper=await uploadPaper(file);await api('/api/tasks/'+encodeURIComponent(taskId)+'/resume','POST',{upload_id:paper.upload_id});await refreshAll();toast('PDF 已导入，原任务继续处理');}catch(error){toast(error.message,true);}
+  });
+  AgentControls.init({api,state,toast,refresh:async(name)=>{
+    if(!name)return refreshAll();if(name==='library')return refreshLibrary();if(name==='knowledge')return refreshKnowledge();
+    if(['schedules','history'].includes(name)){await refreshSchedules();const tasks=await api('/api/tasks');state.tasks=tasks.tasks||[];renderTasks();return;}
+    return refreshAll();
+  }});
   updatePaperSource();
   renderChatAttachment();
   updateScheduleTime();
   updateSubmitState();
-  setView(location.hash.slice(1) || 'chat', false);
-  refreshAll().then(() => Promise.all([refreshLibrary(),refreshConversations(),refreshKnowledge()])).catch(error => toast(error.message, true));
+  const initialPanel=location.hash.slice(1);setView('chat',false);
+  refreshAll().then(async()=>{await Promise.all([refreshLibrary(),refreshConversations(),refreshKnowledge()]);if(initialPanel&&initialPanel!=='chat')await AgentControls.panel(initialPanel);}).catch(error => toast(error.message, true));
 })();

@@ -140,10 +140,14 @@ class CapabilityRegistry:
         if context.cancellation:
             context.cancellation.check()
         from storage_layout import feature_directory
-        scoped_settings = copy.copy(context.settings)
+        from agent_profiles import resolve_agent
+        scoped_settings = copy.copy(resolve_agent(context.settings, capability_id))
         scoped_settings.library_root = getattr(context.settings, "library_root", context.settings.output_dir)
         scoped_settings.output_dir = feature_directory(context.settings.output_dir, capability_id)
-        context = replace(context, settings=scoped_settings)
+        supplied = context.client
+        if isinstance(supplied, DeepSeekClient):
+            supplied = None
+        context = replace(context, settings=scoped_settings, client=supplied)
         result = capability.executor(normalized, context)
         if context.cancellation:
             context.cancellation.check()
@@ -243,7 +247,8 @@ registry.register(Capability(
         "url": {"type": "string", "title": "论文链接", "format": "uri", "maxLength": 4096, "description": "公开 PDF 或论文页面；与原文、附件三选一"},
         "paper_text": {"type": "string", "title": "论文原文", "maxLength": 300000, "format": "multiline", "description": "粘贴可读取的原文，至少200字；与链接、附件三选一"},
         "upload_id": {"type": "string", "title": "PDF 附件", "format": "paper-upload", "maxLength": 32, "description": "已上传的本地 PDF；与链接、原文三选一"},
-        "title": {"type": "string", "title": "标题提示", "maxLength": 200}},
+        "title": {"type": "string", "title": "标题提示", "maxLength": 200},
+        "source_url": {"type": "string", "title": "关联的原论文链接", "maxLength": 4096}},
         "additionalProperties": False}, executor=_execute_paper, validator=_validate_paper))
 
 

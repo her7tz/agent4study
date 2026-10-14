@@ -353,8 +353,9 @@ class KnowledgeService:
         with self.connect() as db:
             db.execute("UPDATE knowledge_ingestions SET " + ",".join(key + "=?" for key in fields) + " WHERE id=?", list(fields.values()) + [job_id])
 
-    def _extract(self, snapshot, token, progress):
-        settings = self.settings_provider()
+    def _extract(self, snapshot, token, progress, settings=None):
+        from agent_profiles import resolve_agent
+        settings = settings or resolve_agent(self.settings_provider(), "conversation_knowledge")
         if not settings.api_key:
             raise RuntimeError("归档已保留。请先配置模型 API Key，再重试知识提取。")
         if sum(len(message["content"]) for message in snapshot["messages"]) > 300000:
@@ -370,7 +371,7 @@ class KnowledgeService:
                 size += len(part["content"])
         if current:
             chunks.append(current)
-        skill = load_skill_instructions("conversation_knowledge")
+        skill = settings.skill_instructions
         from capabilities import CapabilityContext
         from harness_runtime import SharedHarness
         shared = SharedHarness(CapabilityContext(settings, logger=self.logger, client=DeepSeekClient(settings, timeout=120), cancellation=token, progress=progress), "conversation_knowledge")
@@ -409,7 +410,7 @@ class KnowledgeService:
                 continue
             with self.lock:
                 token = self.tokens.get(job_id)
-            job_secret = ""
+            job_secrets = []
             try:
                 if token is None:
                     continue
@@ -417,11 +418,13 @@ class KnowledgeService:
                 with self.connect() as db:
                     row = db.execute("SELECT snapshot FROM knowledge_ingestions WHERE id=?", (job_id,)).fetchone()
                 snapshot = json.loads(row[0])
-                job_secret = self.settings_provider().api_key
+                from agent_profiles import resolve_agent
+                settings = resolve_agent(self.settings_provider(),"conversation_knowledge")
+                job_secrets = list(settings._profile_secrets) + [settings.api_key]
                 self._update(job_id, status="running", stage="开始提取知识")
                 result = self.store.batch(job_id)
                 if result is None:
-                    points = self._extract(snapshot, token, lambda stage: self._update(job_id, stage=stage))
+                    points = self._extract(snapshot, token, lambda stage: self._update(job_id, stage=stage), settings)
                     token.check()
                     result = self.store.ingest(job_id, snapshot, points)
                 token.check()
@@ -431,9 +434,10 @@ class KnowledgeService:
             except RunCancelled:
                 self._update(job_id, status="interrupted", stage="知识提取已中断，可重试", finished_at=time.time())
             except Exception as exc:
-                secret = self.settings_provider().api_key
+                from agent_profiles import AgentProfiles
+                secrets = AgentProfiles(self.settings_provider()).secrets()
                 detail = str(exc)
-                for value in {secret, job_secret}:
+                for value in secrets + job_secrets:
                     if value:
                         detail = detail.replace(value, "[已隐藏凭证]")
                 self._update(job_id, status="failed", stage="知识提取失败，归档仍保留", error=detail[:1200], finished_at=time.time())

@@ -16,6 +16,7 @@ from typing import Any, Callable, Dict, List, Optional
 from harness import JobStore, Settings, notify_local
 from capabilities import get_capability, validate_parameters
 from runtime_control import CancellationToken, RunCancelled
+from paper_summary import MaterialRequired
 
 
 RUN_GRACE_SECONDS = 60
@@ -231,6 +232,8 @@ class Scheduler:
             def progress(stage):
                 token.check()
                 self.store.record_run(job["id"], scheduled_at, "running", stage, started_at=started)
+            progress.job_id=job["id"]
+            progress.scheduled_at=scheduled_at
             result = self.controlled_runner(capability, normalized, token, progress) if self.controlled_runner else self.runner(capability, normalized)
             token.check()
             detail = "{}已完成：{}".format(definition.title, result.get("title", definition.title))
@@ -240,6 +243,9 @@ class Scheduler:
             )
             self.logger.info("定时任务 %s 完成：%s", job["id"], output_path)
             notify_local("定时任务已完成", detail, self.logger)
+        except MaterialRequired as exc:
+            self.store.record_run(job["id"],scheduled_at,"waiting_user",str(exc),None,started)
+            self.logger.info("定时任务 %s 等待论文材料",job["id"])
         except RunCancelled:
             with self.store._connect() as db:
                 row = db.execute("SELECT status FROM job_runs WHERE job_id=? AND scheduled_at=? ORDER BY id DESC LIMIT 1", (job["id"], scheduled_at)).fetchone()

@@ -34,7 +34,7 @@ def main():
     print("正在构建桌面客户端…", flush=True)
     subprocess.run([compiler, "-swift-version", "5", "-parse-as-library", "-sdk", sdk,
                     "-target", architecture + "-apple-macos13.0", "-module-cache-path", str(build / "module-cache"),
-                    "-framework", "Cocoa", "-framework", "WebKit", str(source), "-o", str(executable)], check=True)
+                    "-framework", "Cocoa", "-framework", "WebKit", "-framework", "Security", str(source), str(ROOT / "desktop/AccountBrowser.swift"), "-o", str(executable)], check=True)
     iconset = build / "Agent.iconset"
     subprocess.run([str(executable), "--write-icon", str(iconset)], check=True)
     # Modern ICNS entries contain the PNG representations produced above.
@@ -54,7 +54,7 @@ def main():
     info = {
         "CFBundleIdentifier": "local.agent.workbench", "CFBundleName": "Agent 工作台",
         "CFBundleDisplayName": "Agent 工作台", "CFBundleExecutable": "AgentDesktop",
-        "CFBundlePackageType": "APPL", "CFBundleVersion": "5", "CFBundleShortVersionString": "0.5.0",
+        "CFBundlePackageType": "APPL", "CFBundleVersion": "6", "CFBundleShortVersionString": "0.6.0",
         "CFBundleIconFile": "AppIcon", "LSMinimumSystemVersion": "13.0",
         "NSHighResolutionCapable": True,
         "NSAppTransportSecurity": {"NSAllowsLocalNetworking": True},

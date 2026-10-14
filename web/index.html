@@ -10,6 +10,7 @@
   <script src="/vendor/marked.umd.js" defer></script>
   <script src="/vendor/purify.min.js" defer></script>
   <script src="/vendor/mermaid.min.js" defer></script>
+  <script src="/conversation_controls.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -44,16 +45,9 @@
         <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
         <span class="brand-type">Agent 工作台<small>LOCAL WORKSPACE</small></span>
       </a>
-      <div class="nav-label">能力与任务</div>
-      <nav class="nav-list">
-        <button class="nav-item is-active" data-view="chat" aria-current="page"><svg class="icon"><use href="#i-spark"/></svg><span>与 Agent 对话</span></button>
-        <button class="nav-item" data-view="knowledge"><svg class="icon"><use href="#i-file"/></svg><span>个人知识库</span></button>
-        <button class="nav-item" data-view="video"><svg class="icon"><use href="#i-video"/></svg><span>视频总结</span><span id="active-task-count" class="nav-count" hidden></span></button>
-        <button class="nav-item" data-view="paper"><svg class="icon"><use href="#i-file"/></svg><span>论文总结</span></button>
-        <button class="nav-item" data-view="schedules"><svg class="icon"><use href="#i-clock"/></svg><span>定时任务</span></button>
-        <button class="nav-item" data-view="history"><svg class="icon"><use href="#i-history"/></svg><span>运行记录</span></button>
-        <button class="nav-item" data-view="settings"><svg class="icon"><use href="#i-settings"/></svg><span>模型设置</span></button>
-      </nav>
+      <div class="nav-label">我的 Agent</div>
+      <nav class="nav-list"><button class="nav-item is-active" data-view="chat" aria-current="page"><svg class="icon"><use href="#i-spark"/></svg><span>与 Agent 对话</span><span id="active-task-count" class="nav-count" hidden></span></button></nav>
+      <p class="sidebar-dialogue-help">功能、知识与任务，<br>都从对话开始。</p>
       <div class="sidebar-bottom">
         <div class="sidebar-note"><svg class="icon"><use href="#i-leaf"/></svg><p>让日常工作，有序推进。<br><span>任务与结果保存在本机。</span></p></div>
         <div class="model-indicator"><span id="model-dot" class="status-dot"></span><div><strong id="sidebar-provider">正在连接</strong><span id="sidebar-model">读取本地服务状态</span></div></div>
@@ -69,24 +63,25 @@
         <div id="connection-error" class="notice notice-error" role="alert" hidden><svg class="icon"><use href="#i-alert"/></svg><div><strong>暂时无法连接本地服务</strong><p id="connection-error-message">请确认本地 Agent 正在运行，然后刷新页面。</p></div><button id="reconnect-button" class="button button-small button-plain">重新连接</button></div>
 
         <section id="view-chat" class="view">
-          <div class="page-heading"><div><span class="eyebrow">YOUR AGENT</span><h1 tabindex="-1">说出想做的事<span class="heading-dot">。</span></h1><p>聊知识、联网研究、执行功能，都从这里开始。</p></div><button id="chat-new" class="button button-secondary" type="button">新对话</button></div>
+          <div class="page-heading"><div><span class="eyebrow">YOUR AGENT</span><h1 tabindex="-1">说出想做的事<span class="heading-dot">。</span></h1><p>聊知识、执行任务、管理资料，都在同一段对话里。</p></div><div class="heading-actions"><button id="chat-config" class="text-button" type="button">配置 Agent</button><button id="chat-new" class="button button-secondary" type="button">新对话</button></div></div>
           <div class="conversation-layout"><aside class="card conversation-sidebar" aria-label="历史会话"><div class="section-topline"><h2>我的对话</h2></div><div class="conversation-filters"><button type="button" data-conversation-scope="active" class="is-current" aria-pressed="true">当前</button><button type="button" data-conversation-scope="archived" aria-pressed="false">归档</button></div><div id="conversation-list"></div></aside><div class="conversation-main">
           <section class="card chat-card" aria-label="Agent 对话">
             <div class="conversation-toolbar"><strong id="conversation-title">新对话</strong><div><button id="conversation-archive" class="text-button" type="button">归档</button><button id="conversation-unarchive" class="text-button" type="button" hidden>恢复对话</button><button id="conversation-rename" class="text-button" type="button">重命名</button><button id="conversation-delete" class="text-button" type="button">删除对话</button></div></div>
             <div id="conversation-archive-status" class="archive-status" role="status" hidden></div>
             <div id="chat-messages" class="chat-messages" role="log" aria-label="对话记录" aria-live="polite" aria-relevant="additions"></div>
             <div id="chat-busy" class="chat-busy" role="status" hidden><span class="spinner" aria-hidden="true"></span><span id="chat-stage">正在理解问题…</span></div>
+            <div id="chat-control-panel" class="chat-control-panel" hidden><div class="section-topline"><strong id="chat-panel-title">对话操作</strong><button id="chat-panel-close" class="text-button" type="button">收起</button></div><div id="chat-panel-body"></div></div>
             <form id="chat-form" class="chat-form">
               <label class="field-label" for="chat-input">告诉 Agent 你想做什么</label>
               <textarea id="chat-input" class="text-input chat-input" rows="3" placeholder="解释一个概念，或研究一个问题…&#10;也可以发来视频链接、安排任务、查询笔记。也可以附加论文 PDF。" maxlength="16000"></textarea>
               <div class="chat-options"><button id="chat-attach" class="text-button" type="button">附加论文 PDF</button><input id="chat-paper-file" type="file" accept="application/pdf,.pdf" hidden><label><input id="chat-web" type="checkbox" checked> 允许联网查询</label><button id="chat-retry" class="text-button" type="button">重试上一条</button></div>
               <div id="chat-attachment" class="attachment-chip" hidden><span id="chat-attachment-name"></span><button id="chat-attachment-remove" class="text-button" type="button">移除附件</button></div>
-              <div class="chat-form-footer"><p class="field-help">功能：<span id="chat-capabilities">正在读取…</span>。报告自动保存。</p><div class="chat-send-actions"><button id="chat-stop" class="button button-secondary" type="button" hidden>停止回复</button><button id="chat-submit" class="button button-primary" type="submit"><span>发送</span><svg class="icon"><use href="#i-arrow"/></svg></button></div></div>
+              <div class="chat-form-footer"><p class="field-help">已接入：<span id="chat-capabilities">正在读取…</span>。报告自动保存。</p><div class="chat-send-actions"><button id="chat-stop" class="button button-secondary" type="button" hidden>停止回复</button><button id="chat-submit" class="button button-primary" type="submit"><span>发送</span><svg class="icon"><use href="#i-arrow"/></svg></button></div></div>
               <p id="chat-error" class="inline-error" role="alert" hidden></p>
             </form>
           </section>
           </div></div>
-          <section class="card library-card"><div class="section-topline"><h2>内容库</h2><button id="library-refresh" class="text-button" type="button">刷新内容</button></div><p class="field-help">按功能分目录自动保存。可以打开、移入回收站，或通过对话查询和删除。</p><label class="field-label" for="library-category">内容分类</label><select id="library-category" class="text-input"><option value="">全部内容</option><option value="knowledge_archives">知识归档</option><option value="video_summary">视频总结</option><option value="paper_summary">论文总结</option><option value="web_research">联网研究</option><option value="notes">普通笔记</option></select><p id="library-directory" class="field-help"></p><div id="library-list"></div><details><summary>回收站</summary><div id="library-trash"></div></details></section>
+          <section id="library-card" class="card library-card" hidden><div class="section-topline"><h2>内容库</h2><button id="library-refresh" class="text-button" type="button">刷新内容</button></div><p class="field-help">按功能分目录自动保存。可以打开、移入回收站，或通过对话查询和删除。</p><label class="field-label" for="library-category">内容分类</label><select id="library-category" class="text-input"><option value="">全部内容</option><option value="knowledge_archives">知识归档</option><option value="video_summary">视频总结</option><option value="paper_summary">论文总结</option><option value="web_research">联网研究</option><option value="notes">普通笔记</option></select><p id="library-directory" class="field-help"></p><div id="library-list"></div><details><summary>回收站</summary><div id="library-trash"></div></details></section>
         </section>
 
         <section id="view-knowledge" class="view" hidden>

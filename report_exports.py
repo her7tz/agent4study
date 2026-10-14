@@ -240,6 +240,15 @@ def build_report_archive(output_dir: Path, report_relative: str) -> ReportArchiv
                     raise ExportError(413, "报告与图片的总大小不能超过 128 MB。")
                 archive.writestr(image, data)
                 seen.add(image)
+            # A paper original is a fixed companion asset, never an arbitrary linked file.
+            pdf_reference=PurePosixPath(report).stem+"_assets/original.pdf"
+            if "("+pdf_reference+")" in markdown:
+                pdf=posixpath.join(posixpath.dirname(report),pdf_reference)
+                data=_read_file(root_fd,_relative_path(pdf))
+                if not data[:1024].lstrip().startswith(b"%PDF-"):raise ExportError(400,"原始论文文件不是有效 PDF。")
+                total+=len(data)
+                if total>MAX_EXPORT_BYTES or len(seen)>=MAX_EXPORT_FILES:raise ExportError(413,"导出材料超过大小或文件数限制。")
+                archive.writestr(pdf,data)
         size = stream.tell()
         if size > MAX_EXPORT_BYTES:
             raise ExportError(413, "导出文件不能超过 128 MB。")

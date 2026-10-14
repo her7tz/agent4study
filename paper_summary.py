@@ -24,6 +24,10 @@ class PaperError(ValueError):
     retryable = False
 
 
+class MaterialRequired(PaperError):
+    pass
+
+
 def _fetch_paper(url, token):
     try:
         return fetch_public(url, token, timeout=30, binary=True, max_bytes=MAX_PDF_BYTES)
@@ -31,7 +35,7 @@ def _fetch_paper(url, token):
         if exc.retryable:
             raise
         detail = "返回 HTTP 202，当前游客读取器未取得论文文字，页面可能要求访问验证或异步加载" if exc.http_status == 202 else str(exc)
-        raise PaperError("论文链接" + detail + "。请上传可读取的论文 PDF、粘贴原文，或提供无需验证的公开全文链接。") from exc
+        raise MaterialRequired("论文链接" + detail + "。请上传可读取的论文 PDF、粘贴原文，或提供无需验证的公开全文链接。") from exc
 
 
 class PaperUploads:
@@ -76,6 +80,8 @@ def validate_paper(parameters):
     sources = [key for key in ("paper_text", "url", "upload_id") if result.get(key)]
     if len(sources) != 1:
         raise PaperError("请选择一种论文来源：原文、公开链接或 PDF 附件。")
+    if "source_url" in result:
+        result["source_url"] = public_url(result["source_url"])
     if "url" in result:
         result["url"] = public_url(result["url"])
     if "paper_text" in result and len(result["paper_text"]) < 200:
@@ -130,6 +136,13 @@ def _pdf(data, token, progress):
     return {"text": text, "title": title, "pages": pages, "scope": notice, "kind": "pdf", "empty_pages": empty}
 
 
+def _pdf_material(data, settings, token, progress):
+    material=_pdf(data,token,progress)
+    upload=PaperUploads(settings.data_home).save(data,"original.pdf")
+    path,_=PaperUploads(settings.data_home).get(upload["upload_id"])
+    return {**material,"_pdf_path":str(path)}
+
+
 class _PaperPage(_PageText):
     def __init__(self):
         super().__init__()
@@ -153,7 +166,7 @@ def read_paper(parameters, settings, token, progress):
         if path.stat().st_size > MAX_PDF_BYTES:
             raise PaperError("PDF 超过20 MB，请重新上传较小文件。")
         material = _pdf(path.read_bytes(), token, progress)
-        return {**material, "filename": metadata["filename"], "upload_id": parameters["upload_id"], "title": material["title"] or parameters.get("title") or metadata["filename"]}
+        return {**material, "filename": metadata["filename"], "upload_id": parameters["upload_id"], "_pdf_path": str(path), "original_url": parameters.get("source_url"), "title": material["title"] or parameters.get("title") or metadata["filename"]}
     original = parameters["url"]
     parsed = urlsplit(original)
     target = original
@@ -171,7 +184,7 @@ def read_paper(parameters, settings, token, progress):
         final, data, mime = _fetch_paper(original, token)
         fallback = "论文全文链接暂不可访问，仅读取链接页面可见材料。"
     if data[:1024].lstrip().startswith(b"%PDF-"):
-        return {**_pdf(data, token, progress), "url": final, "original_url": original}
+        return {**_pdf_material(data, settings, token, progress), "url": final, "original_url": original}
     if "pdf" in mime:
         raise PaperError("链接声称是 PDF，但没有返回有效 PDF。请上传原文。")
     if not any(kind in mime for kind in ("text/", "html", "xml")):
@@ -189,7 +202,7 @@ def read_paper(parameters, settings, token, progress):
         if len(visible) < 2000 and any(phrase in visible.casefold() for phrase in (
                 "we need to verify that you're not a robot", "verify you are human",
                 "enable javascript and cookies to continue", "checking your browser before accessing")):
-            raise PaperError("论文页面是访问验证页面，未取得论文内容。请上传 PDF、粘贴原文或提供公开全文链接。")
+            raise MaterialRequired("论文页面是访问验证页面，未取得论文内容。请上传 PDF、粘贴原文或提供公开全文链接。")
         title = parser.citations.get("citation_title") or "".join(parser.title).strip() or title
         pdf_url = parser.citations.get("citation_pdf_url")
         if pdf_url:
@@ -197,7 +210,7 @@ def read_paper(parameters, settings, token, progress):
                 pdf_final, pdf_data, _ = _fetch_paper(urljoin(final, pdf_url), token)
                 if not pdf_data[:1024].lstrip().startswith(b"%PDF-"):
                     raise PaperError("全文链接没有返回 PDF。")
-                return {**_pdf(pdf_data, token, progress), "url": pdf_final, "original_url": original, "title": title[:200]}
+                return {**_pdf_material(pdf_data, settings, token, progress), "url": pdf_final, "original_url": original, "title": title[:200]}
             except RunCancelled:
                 raise
             except Exception:
@@ -208,7 +221,7 @@ def read_paper(parameters, settings, token, progress):
         if abstract and abstract not in text:
             text += "\n\n摘要：" + abstract
     if len(text) < 200:
-        raise PaperError("论文页面文字不足，可能需要登录或由脚本加载。请上传 PDF 或粘贴原文。")
+        raise MaterialRequired("论文页面文字不足，可能需要登录或由脚本加载。请上传 PDF 或粘贴原文。")
     if len(text) > MAX_TEXT:
         raise PaperError("链接文字超过 30 万字，请提供论文正文或上传 PDF。")
     return {"text": text, "title": title[:200], "url": final, "original_url": original, "kind": "page", "scope": scope + (" " + fallback if fallback else "")}
@@ -221,6 +234,7 @@ def summarize_paper(parameters, context):
     token.check()
     skill = load_skill_instructions("paper_summary")
     text = material.pop("text")
+    pdf_path = material.pop("_pdf_path", None)
     # Process every chunk, never silently omit the end of a long paper.
     chunks = [text[index:index+18000] for index in range(0, len(text), 18000)]
     evidence = text
@@ -257,5 +271,5 @@ def summarize_paper(parameters, context):
     token.check()
     heading = re.search(r"^#\s+(.+)$", markdown, re.M)
     return {"title": heading.group(1)[:200] if heading else material["title"][:200], "markdown": markdown,
-            "sources": [material], "source_scope": material["scope"], "material_chars": len(text),
+            "sources": [material], "source_scope": material["scope"], "material_chars": len(text), "_pdf_path": pdf_path,
             "sections": len(re.findall(r"^##\s", markdown, re.M))}

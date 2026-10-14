@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 
 from harness import DeepSeekClient
+from agent_profiles import create_client, redact
 from runtime_control import CancellationToken
 
 
@@ -57,7 +58,7 @@ class SharedHarness:
         self.context, self.settings = context, context.settings
         self.role, self.run_id = role, uuid.uuid4().hex
         self.cancellation = context.cancellation or CancellationToken()
-        self.model = ControlledModel(context.client or DeepSeekClient(self.settings, timeout=180), self.cancellation)
+        self.model = ControlledModel(context.client or create_client(self.settings, timeout=180), self.cancellation)
         directory = self.settings.data_home / "subagent-runs"
         directory.mkdir(parents=True, exist_ok=True)
         self.trace_path = directory / (self.run_id + ".jsonl")
@@ -65,10 +66,7 @@ class SharedHarness:
 
     def trace(self, event, **fields):
         payload = {"at": time.time(), "run_id": self.run_id, "role": self.role, "event": event, **fields}
-        secret = self.settings.api_key
-        text = json.dumps(payload, ensure_ascii=False)
-        if secret:
-            text = text.replace(secret, "[已隐藏凭证]")
+        text = redact(self.settings, json.dumps(payload, ensure_ascii=False))
         descriptor = os.open(str(self.trace_path), os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
         with os.fdopen(descriptor, "a", encoding="utf-8") as stream:
             stream.write(text + "\n")

@@ -6,7 +6,8 @@ if [[ ! -x "$desktop_python" ]]; then
     read -r 'desktop_answer?按 Enter 关闭。'
     exit 1
 fi
-if [[ ! -d "$PWD/dist/Agent 工作台.app" ]]; then
+desktop_executable="$PWD/dist/Agent 工作台.app/Contents/MacOS/AgentDesktop"
+if [[ ! -x "$desktop_executable" || "$PWD/desktop/AgentDesktop.swift" -nt "$desktop_executable" || "$PWD/desktop/AccountBrowser.swift" -nt "$desktop_executable" || "$PWD/build_desktop.py" -nt "$desktop_executable" ]]; then
     "$desktop_python" "$PWD/build_desktop.py" || exit 1
 fi
 exec /usr/bin/open "$PWD/dist/Agent 工作台.app"

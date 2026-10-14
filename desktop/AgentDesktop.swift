@@ -75,6 +75,7 @@ private final class AgentDesktop: NSObject, NSApplicationDelegate, NSWindowDeleg
     private var spinner = NSProgressIndicator()
     private var retryButton: NSButton!
     private var overlay = NSView()
+    private var accountBrowserManager: AccountBrowserManager?
     private var backend: Process?
     private var backendLog: FileHandle?
     private var pollingTimer: Timer?
@@ -98,6 +99,11 @@ private final class AgentDesktop: NSObject, NSApplicationDelegate, NSWindowDeleg
         showWindow(nil)
         do {
             configuration = try DesktopConfiguration.load()
+            if let config = configuration {
+                let manager = AccountBrowserManager(base: URL(string: "http://127.0.0.1:\(config.port)/")!, dataRoot: config.data)
+                accountBrowserManager = manager
+                webView.configuration.userContentController.add(manager, name: "agentDesktop")
+            }
             connect(nil)
         } catch {
             showConnectionFailure(error.localizedDescription)
@@ -434,6 +440,7 @@ private final class AgentDesktop: NSObject, NSApplicationDelegate, NSWindowDeleg
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !quitting else { return .terminateLater }
         quitting = true
+        accountBrowserManager?.shutdown()
         pollingTimer?.invalidate()
         activeSavePanel?.cancel(nil)
         for request in destinationRequests { request.completion(nil) }
