@@ -159,7 +159,8 @@ class Settings:
     def prepare(self) -> None:
         self.data_home.mkdir(parents=True, exist_ok=True)
         from storage_layout import prepare_library
-        prepare_library(self.output_dir)
+        prepare_library(getattr(self, "library_root", self.output_dir))
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
 
 def configure_logging(settings: Settings) -> logging.Logger:

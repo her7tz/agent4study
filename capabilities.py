@@ -141,6 +141,7 @@ class CapabilityRegistry:
             context.cancellation.check()
         from storage_layout import feature_directory
         scoped_settings = copy.copy(context.settings)
+        scoped_settings.library_root = getattr(context.settings, "library_root", context.settings.output_dir)
         scoped_settings.output_dir = feature_directory(context.settings.output_dir, capability_id)
         context = replace(context, settings=scoped_settings)
         result = capability.executor(normalized, context)
