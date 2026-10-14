@@ -307,7 +307,7 @@ class WebRuntime:
         return {
             "app_name": "本地 Agent",
             "version": "0.6.0",
-            "interaction": "conversation",
+            "interaction": "conversation_and_pages",
             "api_key_configured": bool(settings.api_key),
             "provider": "deepseek",
             "model": settings.model,

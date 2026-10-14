@@ -146,12 +146,12 @@
   }
 
   function updateSubmitState() {
-    const ready = state.connected && state.status?.api_key_configured && state.status?.dependencies?.yt_dlp;
+    const ready = state.connected && state.status?.dependencies?.yt_dlp;
     $('summarize-button').disabled = state.submitting || !ready;
     $('summarize-button').querySelector('span').textContent = state.submitting ? '正在提交…' : '生成视频笔记';
     $('schedule-submit').disabled = !state.connected || !state.capabilities.length || Boolean(state.scheduleUploading);
     $('settings-submit').disabled = !state.connected;
-    $('paper-submit').disabled = !state.connected || !state.status?.api_key_configured || state.paperSubmitting;
+    $('paper-submit').disabled = !state.connected || state.paperSubmitting;
     $('paper-submit').querySelector('span').textContent = state.paperSubmitting ? '正在提交…' : '生成论文笔记';
     $('chat-attach').disabled = !state.connected || state.chatBusy || state.chatUploading || state.conversationArchived;
     $('chat-attach').textContent = state.chatUploading ? '正在上传…' : '附加论文 PDF';
@@ -646,10 +646,11 @@
     const failed = ['failed', 'interrupted'].includes(task.status);
     const elapsed = Math.max(0, Math.floor(((task.finished_at || Date.now() / 1000) - Number(task.created_at))));
     const elapsedText = Number.isFinite(elapsed) ? elapsed < 60 ? `${elapsed} 秒` : `${Math.floor(elapsed / 60)} 分 ${elapsed % 60} 秒` : '';
-    const title = isActive ? '正在处理'+capabilityTitle(task) : task.status === 'completed' ? '这份笔记，已经整理好了' : task.status === 'interrupted' ? '任务已中断' : '这次整理没有完成';
+    const title = task.status==='waiting_user'?'等待论文材料':isActive ? '正在处理'+capabilityTitle(task) : task.status === 'completed' ? '这份笔记，已经整理好了' : task.status === 'interrupted' ? '任务已中断' : '这次整理没有完成';
     const description = isActive ? '可切换页面，任务会继续处理。' : task.status === 'completed' ? `${Number(task.sections) || 0} 个内容分段${paper?'':' · '+(Number(task.frames)||0)+' 张关键画面'}` : task.error || '请查看本地运行情况后重试。';
     card.className = `card progress-card${failed ? ' is-failed' : ''}`;
     card.innerHTML = `<div class="progress-icon">${isActive ? '<span class="spinner" aria-hidden="true"></span>' : icons(failed ? 'alert' : 'check')}</div><div class="progress-content"><div class="progress-topline"><strong>${escapeHTML(title)}</strong><span class="progress-time">${escapeHTML(elapsedText)}</span></div><p>${escapeHTML(description)}</p>${isActive ? `<p class="progress-detail">${escapeHTML(task.stage || statusNames[task.status])}</p>` : ''}${failed ? '<button class="text-button" data-retry-task>重新填写并尝试 ' + icons('arrow') + '</button>' : ''}</div>`;
+    if(paper&&['waiting_user','failed','interrupted'].includes(task.status))card.querySelector('.progress-content').insertAdjacentHTML('beforeend',`${task.session_id?`<button type="button" class="text-button" data-account-session="${escapeHTML(task.session_id)}">登录并获取论文</button>`:''}<button type="button" class="text-button" data-task-material="${escapeHTML(task.id)}">上传 PDF 继续原任务</button>`);
   }
 
   function outputUrl(value) {
@@ -878,7 +879,7 @@
     renderProgress();
     if (!shouldScroll && !['video','paper'].includes(state.view)) return;
     if (task.status === 'completed' && task.markdown) {
-      if(shouldScroll && !['chat','knowledge','history'].includes(state.view)) await setView(task.capability==='paper_summary'?'paper':'video',false);
+      if(shouldScroll && ['video','paper'].includes(state.view)) await setView(task.capability==='paper_summary'?'paper':'video',false);
       placeResult(!['video','paper'].includes(state.view));
       await showResult(task.markdown, task.title, `${formatTime(task.finished_at, true)} · ${task.model || 'DeepSeek'} · 保存在本机`, task.output_file, `task:${task.id}:${task.finished_at}`);
     } else {
@@ -890,7 +891,7 @@
         if (task.status !== 'completed') toast(task.status === 'deleted' ? '这份内容已移入回收站，可在内容库恢复。' : task.stage || statusNames[task.status]);
         return;
       }
-      if(['knowledge','history'].includes(state.view)) { if(task.status!=='completed')toast(task.stage||statusNames[task.status]);return; }
+      if(['knowledge','history','library','research','settings','schedules'].includes(state.view)) { if(task.status!=='completed')toast(task.stage||statusNames[task.status]);return; }
       const destination=task.capability==='paper_summary'?'paper':'video';
       await setView(destination, false);
       ($('result-card').hidden ? $(destination==='paper'?'paper-progress-card':'progress-card') : $('result-card')).scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -912,6 +913,8 @@
   }
 
   function renderTasks() {
+    const research=state.tasks.filter(task=>task.capability==='web_research');
+    $('research-tasks').innerHTML=research.length?research.map(task=>`<div class="library-row"><div><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(task.error||task.stage)}</small></div><button type="button" class="text-button" data-open-task="${escapeHTML(task.id)}">${escapeHTML(statusNames[task.status]||task.status)}</button>${activeStatuses.has(task.status)?`<button type="button" class="text-button" data-cancel-task="${escapeHTML(task.id)}">取消</button>`:''}</div>`).join(''):emptyState('还没有研究任务','输入问题后，任务进度和报告会显示在这里。','spark');
     const active = state.tasks.filter((task) => activeStatuses.has(task.status));
     $('active-task-count').hidden = !active.length;
     $('active-task-count').textContent = active.length;
@@ -1065,12 +1068,22 @@
   }
 
   async function setView(view, reload = true) {
-    state.view='chat';$('view-chat').hidden=false;
-    document.querySelectorAll('.nav-item').forEach(node=>{node.classList.add('is-active');node.setAttribute('aria-current','page');});
-    $('breadcrumb-page').textContent='与 Agent 对话';document.title='与 Agent 对话 · Agent 工作台';history.replaceState(null,'','#chat');
+    const labels={chat:'与 Agent 对话',knowledge:'个人知识库',video:'视频总结',paper:'论文总结',research:'联网研究',library:'内容库',schedules:'定时任务',history:'运行记录',settings:'Agent 设置'};
+    if(!Object.hasOwn(labels,view))view='chat';
+    AgentControls.close();state.view=view;
+    document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!=='view-'+view);
+    $('library-card').hidden=view!=='library';
+    document.querySelectorAll('.nav-item').forEach(node=>{const selected=node.dataset.view===view;node.classList.toggle('is-active',selected);if(selected)node.setAttribute('aria-current','page');else node.removeAttribute('aria-current');});
+    $('breadcrumb-page').textContent=labels[view];document.title=labels[view]+' · Agent 工作台';history.replaceState(null,'','#'+view);
+    $('view-'+view).querySelector('h1')?.focus({preventScroll:true});
     try{
-      if(view&&view!=='chat')await AgentControls.panel(view);
-      else if(reload)await Promise.all([refreshConversation(),refreshLibrary()]);
+      if(reload)await refreshAll();
+      if(view==='settings')await AgentControls.profiles('global',$('standalone-agent-settings'));
+      if(['video','paper'].includes(view)){const capability=view==='paper'?'paper_summary':'video_summary';if(state.currentTask?.capability!==capability)state.currentTask=state.tasks.find(task=>task.capability===capability)||null;state.currentTaskId=state.currentTask?.id||null;renderProgress();}
+      if(view==='library')await refreshLibrary();
+      if(view==='knowledge')await refreshKnowledge();
+      if(view==='chat'&&reload)await refreshConversation();
+      if(['schedules','history'].includes(view)&&reload)await refreshSchedules();
     }catch(error){toast(error.message,true);}
   }
 
@@ -1083,6 +1096,12 @@
     if (!['https:', 'http:'].includes(url.protocol) || !allowed.includes(host) || url.username || url.password) throw new Error('当前支持 B 站和 YouTube 的公开视频链接。');
     return value;
   }
+
+  $('research-form').addEventListener('submit',async event=>{
+    event.preventDefault();const button=$('research-submit');button.disabled=true;inlineError('research-error');
+    try{const result=await api('/api/tasks','POST',{capability:'web_research',parameters:{topic:$('research-topic').value.trim(),max_sources:Number($('research-sources').value)},conversation_id:state.conversationId});state.tasks.unshift(result.task);renderTasks();ensurePolling();toast('研究任务已提交，报告会自动保存');}
+    catch(error){inlineError('research-error',error.message);}finally{button.disabled=!state.connected;}
+  });
 
   $('summary-form').addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -1189,9 +1208,9 @@
     const detailButton = event.target.closest('[data-run-detail]');
     const disableButton = event.target.closest('[data-disable-job]');
     try {
-      const config=event.target.closest('[data-agent-settings]');if(config){await AgentControls.profiles(config.dataset.agentSettings);return;}
-      const panel=event.target.closest('[data-workspace-panel]');if(panel){await AgentControls.panel(panel.dataset.workspacePanel);return;}
-      const session=event.target.closest('[data-account-session]');if(session){await AgentControls.session(session.dataset.accountSession);return;}
+      const config=event.target.closest('[data-agent-settings]');if(config){if(state.view!=='chat')await setView('chat',false);await AgentControls.profiles(config.dataset.agentSettings);return;}
+      const panel=event.target.closest('[data-workspace-panel]');if(panel){if(state.view!=='chat')await setView('chat',false);await AgentControls.panel(panel.dataset.workspacePanel);return;}
+      const session=event.target.closest('[data-account-session]');if(session){if(state.view!=='chat')await setView('chat',false);await AgentControls.session(session.dataset.accountSession);return;}
       const material=event.target.closest('[data-task-material]');if(material){state.materialTaskId=material.dataset.taskMaterial;materialInput.click();return;}
       const artifactOpen = event.target.closest('[data-artifact-open]');
       const artifactDelete = event.target.closest('[data-artifact-delete]');
@@ -1385,6 +1404,6 @@
   renderChatAttachment();
   updateScheduleTime();
   updateSubmitState();
-  const initialPanel=location.hash.slice(1);setView('chat',false);
-  refreshAll().then(async()=>{await Promise.all([refreshLibrary(),refreshConversations(),refreshKnowledge()]);if(initialPanel&&initialPanel!=='chat')await AgentControls.panel(initialPanel);}).catch(error => toast(error.message, true));
+  const initialPanel=location.hash.slice(1)||'chat';setView('chat',false);
+  refreshAll().then(async()=>{await Promise.all([refreshLibrary(),refreshConversations(),refreshKnowledge()]);if(initialPanel!=='chat')await setView(initialPanel,false);}).catch(error => toast(error.message, true));
 })();
