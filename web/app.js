@@ -481,15 +481,119 @@
     } catch (error) { inlineError('chat-error', error.message); state.chatBusy = false; updateSubmitState(); }
   }
 
+  function activityLabel(name) {
+    const labels = {
+      search_web: '搜索网络资料', read_webpage: '阅读网页',
+      list_subagents: '查看可用 Agent', delegate_subagents: '委派任务', read_subagent_results: '读取任务结果',
+      list_current_tasks: '查看任务进度', cancel_task: '取消任务',
+      search_personal_knowledge: '检索个人知识库', read_personal_knowledge: '阅读相关知识',
+      update_personal_knowledge: '更新知识', delete_personal_knowledge: '整理知识库', restore_personal_knowledge: '恢复知识',
+      list_generated_texts: '查询内容库', read_generated_text: '阅读文档', save_generated_text: '保存文档',
+      delete_generated_texts: '整理内容库', list_deleted_texts: '查看回收站', restore_generated_texts: '恢复文档',
+      list_scheduled_tasks: '查看定时任务', disable_scheduled_task: '停用定时任务',
+      show_agent_settings: '打开 Agent 设置', list_agent_configurations: '查看 Agent 配置', update_agent_configuration: '更新 Agent 配置',
+      show_workspace_controls: '打开工作区', open_account_session: '准备账号访问', list_account_sessions: '查看账号访问', clear_account_session: '清理账号会话',
+    };
+    if (labels[name]) return labels[name];
+    if (String(name).startsWith('schedule_')) return '安排定时任务';
+    if (String(name).startsWith('run_')) return '执行任务';
+    return '处理任务';
+  }
+
+  function renderMessageActivity(actions, message, disclosureKey, openDisclosures) {
+    const activities = actions.filter(action => action.type === 'activity');
+    const sources = [];
+    const seenSources = new Set();
+    for (const source of actions.filter(action => action.type === 'source')) {
+      try {
+        const url = new URL(source.url);
+        if (!['http:', 'https:'].includes(url.protocol)) continue;
+        const key = `${source.kind === 'page' ? 'page' : 'search'}:${url.href}`;
+        if (seenSources.has(key)) continue;
+        seenSources.add(key);
+        sources.push({...source, url});
+      } catch {}
+    }
+    const fragment = document.createDocumentFragment();
+    if (message.streaming && activities.length) {
+      const current = document.createElement('div');
+      current.className = 'message-activity-current';
+      const active = [...activities].reverse().find(activity => activity.status === 'started');
+      current.textContent = active ? `${activityLabel(active.name)}…` : `已处理 ${activities.length} 项操作`;
+      fragment.append(current);
+    }
+    if (activities.length) {
+      const details = document.createElement('details');
+      details.className = 'message-activity';
+      details.dataset.messageDisclosure = `${disclosureKey}:activity`;
+      details.open = openDisclosures.has(details.dataset.messageDisclosure);
+      const summary = document.createElement('summary');
+      const failures = activities.filter(activity => activity.status === 'failed').length;
+      summary.textContent = `执行记录 · ${activities.length} 项${failures ? ` · ${failures} 项未成功` : ''}`;
+      const list = document.createElement('div');
+      list.className = 'message-activity-list';
+      const statuses = {started:'进行中', completed:'已完成', failed:'未成功'};
+      for (const activity of activities) {
+        const row = document.createElement('div');
+        row.className = 'message-activity-row';
+        const label = document.createElement('span');
+        label.textContent = activityLabel(activity.name);
+        const status = document.createElement('small');
+        status.textContent = statuses[activity.status] || '已记录';
+        const technical = document.createElement('code');
+        technical.textContent = activity.name || 'tool';
+        row.append(label, status, technical);
+        list.append(row);
+      }
+      details.append(summary, list);
+      fragment.append(details);
+    }
+    if (sources.length) {
+      const details = document.createElement('details');
+      details.className = 'message-sources';
+      details.dataset.messageDisclosure = `${disclosureKey}:sources`;
+      details.open = openDisclosures.has(details.dataset.messageDisclosure);
+      const pages = sources.filter(source => source.kind === 'page');
+      const leads = sources.filter(source => source.kind !== 'page');
+      const summary = document.createElement('summary');
+      summary.textContent = '资料来源 · ' + [pages.length && `已阅读 ${pages.length}`, leads.length && `搜索线索 ${leads.length}`].filter(Boolean).join(' / ');
+      details.append(summary);
+      for (const [label, items] of [['已阅读的资料', pages], ['搜索线索', leads]]) {
+        if (!items.length) continue;
+        const section = document.createElement('section');
+        section.className = 'message-source-group';
+        const heading = document.createElement('h4');
+        heading.textContent = label;
+        const list = document.createElement('div');
+        list.className = 'message-source-list';
+        for (const source of items) {
+          const link = document.createElement('a');
+          link.className = 'source-link';
+          link.href = source.url.href; link.target = '_blank'; link.rel = 'noopener noreferrer';
+          const title = document.createElement('span');
+          title.className = 'source-link-title'; title.textContent = source.title || source.url.hostname;
+          const host = document.createElement('small');
+          host.className = 'source-link-host'; host.textContent = source.url.hostname;
+          link.append(title, host); list.append(link);
+        }
+        section.append(heading, list); details.append(section);
+      }
+      fragment.append(details);
+    }
+    return fragment;
+  }
+
   function renderChat() {
     const container = $('chat-messages');
     const wasAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+    const previousScroll = container.scrollTop;
+    const openDisclosures = new Set([...container.querySelectorAll('details[data-message-disclosure][open]')].map(details => details.dataset.messageDisclosure));
     container.replaceChildren();
     if (!state.messages.length) {
       container.innerHTML = emptyState('从一句话开始', '解释知识、搜索资料、研究问题，或让 Agent 完成一个任务。', 'spark');
       return;
     }
-    for (const message of state.messages) {
+    for (const [messageIndex, message] of state.messages.entries()) {
       if (!['user', 'assistant'].includes(message.role)) continue;
       const article = document.createElement('article');
       article.className = `chat-message is-${message.role}`;
@@ -516,19 +620,10 @@
       if (Array.isArray(message.actions) && message.actions.length) {
         const actions = document.createElement('div');
         actions.className = 'chat-actions';
+        const disclosureKey = `${state.conversationId || 'new'}:${message.id || (message.streaming ? 'stream:' + state.chatRunId : messageIndex)}`;
+        actions.append(renderMessageActivity(message.actions, message, disclosureKey, openDisclosures));
         for (const action of message.actions) {
-          if(action.type==='activity'){const line=document.createElement('code');line.className='terminal-tool-line';line.textContent='[tool] '+action.name+' · '+action.status;actions.append(line);continue;}
-          if (action.type === 'source') {
-            try {
-              const url = new URL(action.url);
-              if (!['http:', 'https:'].includes(url.protocol)) continue;
-              const link = document.createElement('a'); link.className = 'source-link';
-              link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer';
-              link.textContent = `${action.kind === 'page' ? '已阅读' : '搜索线索'} · ${action.title || url.hostname}`;
-              actions.append(link);
-            } catch {}
-            continue;
-          }
+          if (['activity', 'source'].includes(action.type)) continue;
           if (!['task', 'schedule', 'note', 'deleted', 'knowledge','agent_settings','workspace_panel','account_session'].includes(action.type)) continue;
           const button = document.createElement('button');
           button.type = 'button';
@@ -570,7 +665,7 @@
       }
       container.append(article);
     }
-    if (wasAtBottom || state.chatBusy) container.scrollTop = container.scrollHeight;
+    container.scrollTop = wasAtBottom ? container.scrollHeight : previousScroll;
     renderChatDiagrams();
   }
   function applyConversation(data) {
@@ -1076,9 +1171,10 @@
     for(const agent of state.agents)labels[agent.page]=agent.title;
     if(!Object.hasOwn(labels,view))view='chat';
     AgentControls.close();state.view=view;
+    document.body.classList.toggle('console-chat-mode', view === 'chat');
     document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!=='view-'+view);
     $('library-card').hidden=view!=='library';
-    document.querySelectorAll('.nav-item').forEach(node=>{const selected=node.dataset.view===view;node.classList.toggle('is-active',selected);if(selected)node.setAttribute('aria-current','page');else node.removeAttribute('aria-current');});
+    document.querySelectorAll('.nav-item').forEach(node=>{const selected=node.dataset.view===view;node.classList.toggle('is-active',selected);if(selected){node.setAttribute('aria-current','page');const group=node.closest('details.nav-group');if(group)group.open=true;}else node.removeAttribute('aria-current');});
     $('breadcrumb-page').textContent=labels[view];document.title=labels[view]+' · Agent 工作台';history.replaceState(null,'','#'+view);
     $('view-'+view).querySelector('h1')?.focus({preventScroll:true});
     try{
@@ -1192,6 +1288,8 @@
   });
 
   document.addEventListener('click', async (event) => {
+    const conversationMenu = event.target.closest('.conversation-menu');
+    if (conversationMenu && event.target.closest('button')) conversationMenu.open = false;
     const nav = event.target.closest('[data-view], [data-go]');
     if (nav) { await setView(nav.dataset.view || nav.dataset.go); return; }
     const filter = event.target.closest('[data-filter]');
@@ -1278,7 +1376,7 @@
   $('result-dialog').addEventListener('close', () => $(`${state.resultHome}-result-home`).after($('result-card')));
   $('chat-form').addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (state.chatBusy) return;
+    if (state.chatBusy || state.chatUploading || state.conversationArchived || $('chat-submit').disabled || $('chat-input').disabled) return;
     const message = $('chat-input').value.trim();
     if (!message && !state.chatAttachment) return;
     await submitChat(message);
@@ -1310,7 +1408,13 @@
     finally{state.paperSubmitting=false;updateSubmitState();}
   });
   $('chat-new').addEventListener('click', async () => {
-    try { applyConversation(await api('/api/conversations/new', 'POST', {})); await refreshConversations(); inlineError('chat-error'); }
+    try {
+      applyConversation(await api('/api/conversations/new', 'POST', {}));
+      await refreshConversations();
+      await setView('chat', false);
+      inlineError('chat-error');
+      $('chat-input').focus({preventScroll:true});
+    }
     catch (error) { inlineError('chat-error', error.message); }
   });
   $('chat-stop').addEventListener('click', async () => {
@@ -1380,8 +1484,14 @@
       applyConversation(data); await refreshConversations(); $('conversation-dialog').close();
     } catch (error) { inlineError('conversation-edit-error', error.message); }
   });
+  let chatInputComposing = false;
+  $('chat-input').addEventListener('compositionstart', () => { chatInputComposing = true; });
+  $('chat-input').addEventListener('compositionend', () => { chatInputComposing = false; });
   $('chat-input').addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); $('chat-form').requestSubmit(); }
+    if (event.key !== 'Enter' || event.shiftKey || event.isComposing || chatInputComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    if (event.repeat || state.chatBusy || state.chatUploading || state.conversationArchived || $('chat-submit').disabled || $('chat-input').disabled) return;
+    $('chat-form').requestSubmit($('chat-submit'));
   });
   $('refresh-button').addEventListener('click', () => refreshAll(true));
   $('result-download').addEventListener('click', downloadOfflineNote);

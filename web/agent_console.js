@@ -15,14 +15,15 @@ window.AgentConsole=(()=>{
       section.innerHTML=`<div class="page-heading"><div><span class="eyebrow">SUBAGENT</span><h1 tabindex="-1">${escape(agent.title)}</h1><p>独立配置、任务进度与成果。</p></div></div><section class="card subagent-overview" id="agent-${escape(agent.id)}-overview"></section><section id="agent-${escape(agent.id)}-profile" class="card subagent-profile" hidden></section><section class="card subagent-task-panel"><h2>此 Agent 的任务与执行记录</h2><div id="agent-${escape(agent.id)}-tasks"></div></section><button type="button" class="button button-secondary" data-go="chat">前往主控制台委派任务</button>`;
       $('main-content').append(section);
       const nav=document.createElement('button');nav.type='button';nav.className='nav-item';nav.dataset.view=agent.page;nav.textContent=agent.title;
-      document.querySelector('[data-view="knowledge"]').before(nav);
+      ($('subagent-nav-items')||document.querySelector('.nav-list')).append(nav);
     }
   }
   function render(){
     const agents=state.agents||[];
     ensurePages(agents);
-    $('console-parallel').textContent=`并行上限 ${state.parallel?.limit||4}`;
+    $('console-parallel').textContent=`最多并行 ${state.parallel?.limit||4}`;
     const current=state.tasks.filter(task=>task.conversation_id===state.conversationId&&['queued','running','waiting_user'].includes(task.status));
+    $('console-task-count').textContent=String(current.length);
     $('console-task-log').innerHTML=current.map(taskLine).join('');$('console-task-log').hidden=!current.length;
     const groups=new Map();for(const task of state.tasks.filter(t=>t.group_id&&t.conversation_id===state.conversationId)){const list=groups.get(task.group_id)||[];list.push(task);groups.set(task.group_id,list);}
     $('console-groups').innerHTML=[...groups].slice(0,5).map(([id,tasks])=>`<div class="terminal-group">批次 ${escape(id.slice(0,8))} · ${tasks.filter(t=>t.status==='completed').length}/${tasks.length} 完成 · ${tasks.filter(t=>t.status==='failed').length} 失败 · ${tasks.filter(t=>t.status==='waiting_user').length} 等待材料</div>`).join('');
@@ -40,7 +41,7 @@ window.AgentConsole=(()=>{
     if(!name.startsWith('/'))return false;
     const pages={'/tasks':'history','/notes':'library','/knowledge':'knowledge','/schedule':'schedules','/settings':'settings','/chat':'chat'};
     if(pages[name]&&parts.length===1){await setView(pages[name]);return true;}
-    if(name==='/agents'&&parts.length===1){$('console-agent-list').hidden=false;$('console-agent-list').innerHTML=(state.agents||[]).map(agent=>`<button type="button" class="text-button" data-go="${escape(agent.page)}">${escape(agent.id)} — ${escape(agent.title)}</button>`).join('');return true;}
+    if(name==='/agents'&&parts.length===1){$('console-task-details').open=true;$('console-agent-list').hidden=false;$('console-agent-list').innerHTML=(state.agents||[]).map(agent=>`<button type="button" class="text-button" data-go="${escape(agent.page)}">${escape(agent.id)} — ${escape(agent.title)}</button>`).join('');return true;}
     if(name==='/agent'&&parts.length===2){const agent=(state.agents||[]).find(a=>a.id===parts[1]);if(!agent)throw Error('没有注册该 Subagent。');await setView(agent.page);return true;}
     if(name==='/help'&&parts.length===1){$('console-command-help').open=true;return true;}
     throw Error('未知命令。输入 /help 查看控制台命令，或直接用自然语言描述任务。');

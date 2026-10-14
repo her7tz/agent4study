@@ -3,10 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
-  <meta name="theme-color" content="#f6f7f2">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#191a1d">
   <title>Agent 工作台 · 本地工作空间</title>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/console_layout.css">
   <script src="/vendor/marked.umd.js" defer></script>
   <script src="/vendor/purify.min.js" defer></script>
   <script src="/vendor/mermaid.min.js" defer></script>
@@ -14,7 +15,7 @@
   <script src="/agent_console.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
-<body class="terminal-workspace">
+<body class="terminal-workspace console-chat-mode">
   <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <symbol id="i-video" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="4"/><path d="m10 8 5 4-5 4Z"/></symbol>
     <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
@@ -46,9 +47,23 @@
         <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
         <span class="brand-type">Agent 工作台<small>LOCAL WORKSPACE</small></span>
       </a>
-      <div class="nav-label">控制台与 Subagents</div>
-      <nav class="nav-list"><button class="nav-item is-active" data-view="chat" aria-current="page"><svg class="icon"><use href="#i-spark"/></svg><span>主 Agent 控制台</span></button><button class="nav-item" data-view="video"><svg class="icon"><use href="#i-video"/></svg><span>视频学习 Agent</span></button><button class="nav-item" data-view="paper"><svg class="icon"><use href="#i-file"/></svg><span>论文阅读 Agent</span></button><button class="nav-item" data-view="archivist"><svg class="icon"><use href="#i-leaf"/></svg><span>知识整理 Agent</span></button><button class="nav-item" data-view="knowledge"><svg class="icon"><use href="#i-leaf"/></svg><span>个人知识库</span></button><button class="nav-item" data-view="library"><svg class="icon"><use href="#i-file"/></svg><span>内容库</span></button><button class="nav-item" data-view="schedules"><svg class="icon"><use href="#i-clock"/></svg><span>定时任务</span></button><button class="nav-item" data-view="history"><svg class="icon"><use href="#i-history"/></svg><span>运行记录</span><span id="active-task-count" class="nav-count" hidden></span></button><button class="nav-item" data-view="settings"><svg class="icon"><use href="#i-file"/></svg><span>Agent 设置</span></button></nav>
-      <p class="sidebar-dialogue-help">从主 Agent 委派任务，<br>在各 Subagent 页面管理。</p>
+      <div class="nav-label">工作空间</div>
+      <nav class="nav-list">
+        <button class="nav-item is-active" data-view="chat" aria-current="page"><svg class="icon"><use href="#i-spark"/></svg><span>主 Agent</span></button>
+        <details class="nav-group" open><summary>Subagents</summary><div id="subagent-nav-items">
+          <button class="nav-item" data-view="video"><svg class="icon"><use href="#i-video"/></svg><span>视频学习</span></button>
+          <button class="nav-item" data-view="paper"><svg class="icon"><use href="#i-file"/></svg><span>论文阅读</span></button>
+          <button class="nav-item" data-view="archivist"><svg class="icon"><use href="#i-leaf"/></svg><span>知识整理</span></button>
+        </div></details>
+        <details class="nav-group"><summary>资料与任务</summary><div>
+          <button class="nav-item" data-view="knowledge"><svg class="icon"><use href="#i-leaf"/></svg><span>个人知识库</span></button>
+          <button class="nav-item" data-view="library"><svg class="icon"><use href="#i-file"/></svg><span>内容库</span></button>
+          <button class="nav-item" data-view="schedules"><svg class="icon"><use href="#i-clock"/></svg><span>定时任务</span></button>
+          <button class="nav-item" data-view="history"><svg class="icon"><use href="#i-history"/></svg><span>运行记录</span><span id="active-task-count" class="nav-count" hidden></span></button>
+          <button class="nav-item" data-view="settings"><svg class="icon"><use href="#i-settings"/></svg><span>Agent 设置</span></button>
+        </div></details>
+      </nav>
+      <aside class="conversation-sidebar" aria-label="历史会话"><div class="section-topline"><h2>会话</h2><button id="chat-new" class="icon-button" type="button" aria-label="新对话" title="新对话"><svg class="icon"><use href="#i-plus"/></svg></button></div><div class="conversation-filters"><button type="button" data-conversation-scope="active" class="is-current" aria-pressed="true">当前</button><button type="button" data-conversation-scope="archived" aria-pressed="false">归档</button></div><div id="conversation-list"></div></aside>
       <div class="sidebar-bottom">
         <div class="sidebar-note"><svg class="icon"><use href="#i-leaf"/></svg><p>让日常工作，有序推进。<br><span>任务与结果保存在本机。</span></p></div>
         <div class="model-indicator"><span id="model-dot" class="status-dot"></span><div><strong id="sidebar-provider">正在连接</strong><span id="sidebar-model">读取本地服务状态</span></div></div>
@@ -57,28 +72,28 @@
 
     <div class="workspace">
       <header class="topbar">
-        <div class="breadcrumb">我的工作空间 <svg class="icon"><use href="#i-chevron"/></svg><span id="breadcrumb-page">与 Agent 对话</span></div>
+        <div class="breadcrumb">工作空间 <svg class="icon"><use href="#i-chevron"/></svg><span id="breadcrumb-page">与 Agent 对话</span></div>
         <div class="topbar-actions"><span class="local-badge"><span id="connection-dot" class="status-dot"></span><span id="connection-label">连接中</span></span><button id="refresh-button" class="icon-button" aria-label="刷新当前页面" title="刷新当前页面"><svg class="icon"><use href="#i-refresh"/></svg></button></div>
       </header>
       <main id="main-content" class="main-content">
         <div id="connection-error" class="notice notice-error" role="alert" hidden><svg class="icon"><use href="#i-alert"/></svg><div><strong>暂时无法连接本地服务</strong><p id="connection-error-message">请确认本地 Agent 正在运行，然后刷新页面。</p></div><button id="reconnect-button" class="button button-small button-plain">重新连接</button></div>
 
         <section id="view-chat" class="view">
-          <div class="page-heading"><div><span class="eyebrow">YOUR AGENT</span><h1 tabindex="-1">Agent 控制台</h1><p>输入目标、并行委派 Subagents，连续查看执行结果。</p></div><div class="heading-actions"><button id="chat-config" class="text-button" type="button">配置 Agent</button><button id="chat-new" class="button button-secondary" type="button">新对话</button></div></div>
-          <div class="conversation-layout"><aside class="card conversation-sidebar" aria-label="历史会话"><div class="section-topline"><h2>我的对话</h2></div><div class="conversation-filters"><button type="button" data-conversation-scope="active" class="is-current" aria-pressed="true">当前</button><button type="button" data-conversation-scope="archived" aria-pressed="false">归档</button></div><div id="conversation-list"></div></aside><div class="conversation-main">
+          <h1 class="sr-only" tabindex="-1">主 Agent 对话</h1>
+          <div class="conversation-layout"><div class="conversation-main">
           <section class="card chat-card" aria-label="Agent 对话">
-            <div class="conversation-toolbar"><strong id="conversation-title">新对话</strong><div><button id="conversation-archive" class="text-button" type="button">归档</button><button id="conversation-unarchive" class="text-button" type="button" hidden>恢复对话</button><button id="conversation-rename" class="text-button" type="button">重命名</button><button id="conversation-delete" class="text-button" type="button">删除对话</button></div></div>
+            <div class="conversation-toolbar"><strong id="conversation-title">新对话</strong><details class="conversation-menu"><summary aria-label="会话操作" title="会话操作">···</summary><div><button id="chat-config" class="text-button" type="button">配置主 Agent</button><button id="conversation-archive" class="text-button" type="button">归档</button><button id="conversation-unarchive" class="text-button" type="button" hidden>恢复对话</button><button id="conversation-rename" class="text-button" type="button">重命名</button><button id="conversation-delete" class="text-button" type="button">删除对话</button></div></details></div>
             <div id="conversation-archive-status" class="archive-status" role="status" hidden></div>
             <div id="chat-messages" class="chat-messages" role="log" aria-label="对话记录" aria-live="polite" aria-relevant="additions"></div>
-            <div class="terminal-runtime"><span id="console-parallel">并行上限 4</span><details id="console-command-help"><summary>命令 /help</summary><p>/agents 查看 Subagents · /agent paper_reading 打开论文 Agent</p><p>/tasks 任务 · /notes 内容 · /knowledge 知识 · /schedule 定时 · /settings 配置</p><p>也可以直接输入自然语言任务，例如“同时总结这两个论文链接，然后比较它们的方法”。</p></details></div><div id="console-agent-list" class="console-agent-list" hidden></div><div id="console-groups"></div><div id="console-task-log" class="console-task-log" aria-live="polite" hidden></div>
+            <div class="terminal-runtime"><details id="console-task-details"><summary><span id="console-parallel">并行上限 4</span><span class="runtime-divider">·</span>后台任务 <span id="console-task-count">0</span></summary><div id="console-groups"></div><div id="console-task-log" class="console-task-log" aria-live="polite" hidden></div><div id="console-agent-list" class="console-agent-list" hidden></div></details><details id="console-command-help"><summary>快捷命令</summary><p>/agents 查看 Subagents · /agent paper_reading 打开论文 Agent</p><p>/tasks 任务 · /notes 内容 · /knowledge 知识 · /schedule 定时 · /settings 配置</p><p>可以直接描述任务，例如“同时总结这两篇论文，然后比较它们的方法”。</p></details></div>
             <div id="chat-busy" class="chat-busy" role="status" hidden><span class="spinner" aria-hidden="true"></span><span id="chat-stage">正在理解问题…</span></div>
             <div id="chat-control-panel" class="chat-control-panel" hidden><div class="section-topline"><strong id="chat-panel-title">对话操作</strong><button id="chat-panel-close" class="text-button" type="button">收起</button></div><div id="chat-panel-body"></div></div>
             <form id="chat-form" class="chat-form">
-              <label class="field-label" for="chat-input">告诉 Agent 你想做什么</label>
-              <textarea id="chat-input" class="text-input chat-input" rows="3" placeholder="解释一个概念，或研究一个问题…&#10;也可以发来视频链接、安排任务、查询笔记。也可以附加论文 PDF。" maxlength="16000"></textarea>
+              <label class="sr-only" for="chat-input">发送给 Agent 的消息</label>
+              <textarea id="chat-input" class="text-input chat-input" rows="2" placeholder="向 Agent 提问，或描述一个任务…" aria-describedby="chat-keyboard-help" maxlength="16000"></textarea>
               <div class="chat-options"><button id="chat-attach" class="text-button" type="button">附加论文 PDF</button><input id="chat-paper-file" type="file" accept="application/pdf,.pdf" hidden><label><input id="chat-web" type="checkbox" checked> 允许联网查询</label><button id="chat-retry" class="text-button" type="button">重试上一条</button></div>
               <div id="chat-attachment" class="attachment-chip" hidden><span id="chat-attachment-name"></span><button id="chat-attachment-remove" class="text-button" type="button">移除附件</button></div>
-              <div class="chat-form-footer"><p class="field-help">已接入：<span id="chat-capabilities">正在读取…</span>。报告自动保存。</p><div class="chat-send-actions"><button id="chat-stop" class="button button-secondary" type="button" hidden>停止回复</button><button id="chat-submit" class="button button-primary" type="submit"><span>发送</span><svg class="icon"><use href="#i-arrow"/></svg></button></div></div>
+              <div class="chat-form-footer"><p id="chat-keyboard-help" class="field-help">Enter 发送 · Shift + Enter 换行<span id="chat-capabilities" hidden></span></p><div class="chat-send-actions"><button id="chat-stop" class="button button-secondary" type="button" hidden>停止回复</button><button id="chat-submit" class="button button-primary" type="submit"><span>发送</span><svg class="icon"><use href="#i-arrow"/></svg></button></div></div>
               <p id="chat-error" class="inline-error" role="alert" hidden></p>
             </form>
           </section>
@@ -185,7 +200,7 @@
           <div class="settings-layout"><section class="card settings-form"><h2>Agent 配置</h2><div id="standalone-agent-settings"></div></section><form id="settings-form" class="card settings-form" hidden><div class="provider-heading"><span class="provider-mark" aria-hidden="true"><svg class="icon"><use href="#i-spark"/></svg></span><div><h2>DeepSeek</h2><p>模型服务</p></div><span id="key-status" class="status-pill">读取中</span></div><div class="setting-divider"></div><label class="field-label" for="api-key">API Key <span class="optional-caption" id="key-action-caption">连接凭证</span></label><div class="password-wrap"><input id="api-key" type="password" class="text-input" placeholder="填写你的 DeepSeek API Key" autocomplete="new-password" spellcheck="false" autocapitalize="none" aria-describedby="key-help"><button id="toggle-key-visibility" class="icon-button" type="button" aria-label="显示 API Key" aria-pressed="false"><svg class="icon"><use href="#i-eye"/></svg></button></div><p id="key-help" class="field-help">仅保存到本机，页面不会显示已保存的密钥。</p><label class="field-label" for="model-select">使用的模型</label><select id="model-select" class="text-input" required><option value="">正在读取可用模型…</option></select><p class="field-help">切换后用于新任务，正在处理的任务沿用原模型。</p><div class="endpoint-row"><span>服务地址</span><code id="api-endpoint">https://api.deepseek.com</code><span class="subtle-badge">官方默认</span></div><p id="settings-error" class="inline-error" role="alert" hidden></p><div class="settings-footer"><span id="settings-saved" class="saved-message" aria-live="polite"></span><button id="settings-submit" class="button button-primary" type="submit"><svg class="icon"><use href="#i-check"/></svg>保存设置</button></div></form><aside class="card environment-card"><div class="card-heading"><div class="section-icon"><svg class="icon"><use href="#i-monitor"/></svg></div><div><h2>本地运行状态</h2><p>按当前设备的实际状态显示</p></div></div><div id="dependency-list" class="dependency-list"></div><div class="environment-footnote"><svg class="icon"><use href="#i-leaf"/></svg><p>字幕、转录和图片在本地处理，所需内容会提交给选定的模型生成笔记。</p></div></aside></div>
         </section>
       </main>
-      <footer class="workspace-footer"><span>Agent 工作台 · 让日常工作，有序推进</span><span>本地工作空间</span></footer>
+      <footer class="workspace-footer"><span>Agent 工作台</span><span>本地工作空间</span></footer>
     </div>
   </div>
   <dialog id="run-detail-dialog" class="detail-dialog" aria-labelledby="run-detail-title"><div class="detail-dialog-heading"><h2 id="run-detail-title">运行情况</h2><button class="icon-button" data-close-detail aria-label="关闭运行情况"><svg class="icon"><use href="#i-close"/></svg></button></div><p id="run-detail-content"></p><button class="button button-secondary" data-close-detail>知道了</button></dialog>
