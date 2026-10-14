@@ -120,6 +120,33 @@ class ArtifactStore:
             content = self._safe_path(item["name"]).read_text(encoding="utf-8", errors="replace")
             return {**item, "content": content[:max_chars], "truncated": len(content) > max_chars}
 
+    def resolve_document(self, artifact_id: str) -> Dict[str, Any]:
+        """Resolve a saved document for application adapters, without its content."""
+        if not isinstance(artifact_id, str) or not artifact_id or len(artifact_id) > 64:
+            raise ArtifactError(400, "请提供内容库中的文档编号。")
+        with self._lock:
+            item = self._find(artifact_id)
+            path = self._safe_path(item["name"])
+            if not path.is_file():
+                raise ArtifactError(404, "文档已移除，请重新查询内容库。")
+            return {"artifact": item, "path": path}
+
+    def resolve_directory(self, category: str = "") -> Path:
+        """Resolve only the library root or a registered category directory."""
+        if not isinstance(category, str):
+            raise ArtifactError(400, "请选择已注册的内容分类。")
+        if category and category not in FOLDERS:
+            from capabilities import get_capability
+            try:
+                get_capability(category)
+            except ValueError as exc:
+                raise ArtifactError(400, "请选择已注册的内容分类。") from exc
+        with self._lock:
+            path = self._safe_path(category) if category else self.root
+            if not path.is_dir():
+                raise ArtifactError(404, "没有找到该内容目录。")
+            return path
+
     def _connect(self):
         db = sqlite3.connect(str(self.database), timeout=30)
         db.row_factory = sqlite3.Row

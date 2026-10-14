@@ -31,6 +31,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from capabilities import execute_capability, get_capability, list_capabilities, validate_parameters
 from conversation import ChatService, ConversationError
 from artifacts import ArtifactStore, ArtifactError
+from local_apps import LocalAppService, LocalAppError
 from knowledge import KnowledgeError
 from paper_summary import PaperError, PaperUploads, MAX_PDF_BYTES, MaterialRequired
 from agent_profiles import AgentProfiles, ProfileError, resolve_agent, read_skill
@@ -263,6 +264,9 @@ class WebRuntime:
     def artifacts(self) -> ArtifactStore:
         settings = self.snapshot()
         return ArtifactStore(settings.output_dir, settings.database_path, settings.data_home)
+
+    def local_apps(self) -> LocalAppService:
+        return LocalAppService(self.artifacts(), logger=self.logger)
 
     def status(self) -> Dict[str, Any]:
         settings = self.snapshot()
@@ -839,6 +843,10 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/subagents":
             from agent_registry import registry as agents
             self._json(200,{"agents":[agent.metadata() for agent in agents.all()],"parallel":self.runtime.executor.status()})
+        elif path == "/api/local-apps":
+            self._json(200, {"apps": self.runtime.local_apps().list()})
+        elif path.startswith("/api/local-apps/"):
+            self._json(200, {"app": self.runtime.local_apps().status(path[len("/api/local-apps/"):])})
         elif path == "/api/agent-profiles":
             self._json(200, AgentProfiles(self.runtime.snapshot()).list())
         elif path.startswith("/api/skills/"):
@@ -929,7 +937,23 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
         self._json(201, {"paper": metadata})
 
     def _post(self, path: str, body: Dict[str, Any]) -> None:
-        if path.startswith("/api/agent-profiles/"):
+        if path.startswith("/api/local-apps/"):
+            parts = path[len("/api/local-apps/"):].split("/")
+            if len(parts) != 2:
+                raise APIError(404, "没有找到该应用操作。")
+            app_id, action = parts
+            service = self.runtime.local_apps()
+            if action == "open-document":
+                if set(body) != {"artifact_id"}:
+                    raise APIError(400, "打开文档仅接受 artifact_id。")
+                self._json(202, service.open_document(app_id, body["artifact_id"]))
+            elif action == "open-directory":
+                if set(body) - {"category"}:
+                    raise APIError(400, "打开目录仅接受 category。")
+                self._json(202, service.open_directory(app_id, body.get("category", "")))
+            else:
+                raise APIError(404, "该应用操作尚未支持。")
+        elif path.startswith("/api/agent-profiles/"):
             role = path[len("/api/agent-profiles/"):]
             from agent_profiles import LOCK
             from storage_layout import atomic_text
@@ -1056,6 +1080,9 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
             self._json(exc.status, {"error": str(exc)})
         except ArtifactError as exc:
             self._json(exc.status, {"error": str(exc)})
+        except LocalAppError as exc:
+            self._json(exc.status, {"error": str(exc), "code": exc.code,
+                                    "may_have_submitted": exc.may_have_submitted})
         except (ProfileError, SessionError) as exc:
             self._json(exc.status, {"error": str(exc)})
         except PaperError as exc:
