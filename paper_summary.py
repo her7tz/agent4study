@@ -19,6 +19,17 @@ MAX_TEXT = 300000
 MAX_PAGES = 200
 
 
+PAPER_SKILL_COMPATIBILITY = """
+本项目的论文 Skill 适配规则，优先于第三方 Skill 中的宿主约定：
+- 默认目标是中文知识总结：概述、问题、贡献、方法、实验依据、局限与可复用知识。采用评审 Skill 的证据核对与方法分析，不强制套用整篇审稿模板。
+- 本轮系统指定的处理阶段、输出格式与字数优先。提取材料片段时只整理该片段证据，综合阶段才组织最终总结。
+- 只根据实际提供的文字与阅读范围判断。缺失章节、图表或外部文献时说明未核实，不宣称阅读全文、执行过搜索或检查了看不到的图像。
+- 不为满足模板数量而凑出三项优点或缺点；不默认给分、录用建议或对领域影响作无依据评级。区分论文自述局限与总结者推断。
+- 当前论文执行器不提供 web_fetch、present_files、deep-research 或任意文件写入工具。第三方 Skill 中这些步骤与 /mnt 路径是原宿主的约定，不执行也不假装已执行。
+- 材料读取、成果保存、来源记录与结束检查由已有 Harness 处理；业务 Agent 使用已注册的 produce_result、inspect_result、finish_task 工具。
+""".strip()
+
+
 class PaperError(ValueError):
     status = 400
     retryable = False
@@ -232,7 +243,7 @@ def summarize_paper(parameters, context):
     progress = context.progress or (lambda message: None)
     material = read_paper(parameters, context.settings, token, progress)
     token.check()
-    skill = load_skill_instructions("paper_summary")
+    skill = load_skill_instructions("paper_summary") + "\n\n" + PAPER_SKILL_COMPATIBILITY
     text = material.pop("text")
     pdf_path = material.pop("_pdf_path", None)
     # Process every chunk, never silently omit the end of a long paper.

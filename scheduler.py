@@ -151,6 +151,13 @@ class Scheduler:
         self.runner = runner
         self.logger = logger
         self.controlled_runner = controlled_runner
+        # Research now belongs to the main conversation, outside business scheduling.
+        retired=[job for job in store.get_jobs() if job.get("capability")=="web_research" and job.get("enabled")]
+        for job in retired:
+            store.remove(job["id"])
+            store.record_run(job["id"],job["due_at"],"cancelled","联网研究已改为主 Agent 内置能力，旧独立定时计划已停用。")
+            logger.info("旧联网研究计划 %s 已停用，历史与成果保留",job["id"])
+        if retired:notify_local("联网研究计划已停用","联网研究现在通过 Agent 对话使用；历史报告仍保留。",logger)
         self.tokens = {}
         self.tokens_lock = threading.Lock()
         self.pending = queue.Queue()

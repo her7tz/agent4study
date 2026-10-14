@@ -215,19 +215,6 @@ registry.register(
 )
 
 
-def _execute_research(parameters, context):
-    from subagents import run_business_subagent
-    return run_business_subagent("web_research", parameters, context)
-
-
-registry.register(Capability(
-    id="web_research", title="联网研究",
-    description="围绕问题搜索并阅读公开网页，比较资料，生成带来源引用的研究报告并自动保存。",
-    input_schema={"type": "object", "properties": {
-        "topic": {"type": "string", "title": "研究问题", "minLength": 1, "maxLength": 500},
-        "max_sources": {"type": "integer", "title": "最多读取的来源数", "default": 5, "minimum": 2, "maximum": 8}},
-        "required": ["topic"], "additionalProperties": False}, executor=_execute_research))
-
 
 
 def _execute_paper(parameters, context):

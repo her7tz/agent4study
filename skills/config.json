@@ -4,14 +4,18 @@
     "video_summary": [
       "video-summary"
     ],
-    "web_research": [
-      "web-research"
-    ],
     "conversation_knowledge": [
       "knowledge-extraction"
     ],
     "paper_summary": [
+      "academic-paper-review",
       "paper-summary"
+    ],
+    "global": [
+      "web-research"
+    ],
+    "conversation": [
+      "web-research"
     ]
   }
 }

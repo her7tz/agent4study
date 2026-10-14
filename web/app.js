@@ -281,6 +281,7 @@
     });
   }
   function renderCapabilities() {
+    state.capabilities=state.capabilities.filter(item=>item.id!=='web_research');
     const previous = $('schedule-capability').value;
     rememberScheduleDraft();
     $('schedule-capability').replaceChildren(...state.capabilities.map((capability) => {
@@ -891,7 +892,7 @@
         if (task.status !== 'completed') toast(task.status === 'deleted' ? '这份内容已移入回收站，可在内容库恢复。' : task.stage || statusNames[task.status]);
         return;
       }
-      if(['knowledge','history','library','research','settings','schedules'].includes(state.view)) { if(task.status!=='completed')toast(task.stage||statusNames[task.status]);return; }
+      if(['knowledge','history','library','settings','schedules'].includes(state.view)) { if(task.status!=='completed')toast(task.stage||statusNames[task.status]);return; }
       const destination=task.capability==='paper_summary'?'paper':'video';
       await setView(destination, false);
       ($('result-card').hidden ? $(destination==='paper'?'paper-progress-card':'progress-card') : $('result-card')).scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -913,8 +914,6 @@
   }
 
   function renderTasks() {
-    const research=state.tasks.filter(task=>task.capability==='web_research');
-    $('research-tasks').innerHTML=research.length?research.map(task=>`<div class="library-row"><div><strong>${escapeHTML(task.title)}</strong><small>${escapeHTML(task.error||task.stage)}</small></div><button type="button" class="text-button" data-open-task="${escapeHTML(task.id)}">${escapeHTML(statusNames[task.status]||task.status)}</button>${activeStatuses.has(task.status)?`<button type="button" class="text-button" data-cancel-task="${escapeHTML(task.id)}">取消</button>`:''}</div>`).join(''):emptyState('还没有研究任务','输入问题后，任务进度和报告会显示在这里。','spark');
     const active = state.tasks.filter((task) => activeStatuses.has(task.status));
     $('active-task-count').hidden = !active.length;
     $('active-task-count').textContent = active.length;
@@ -1068,7 +1067,7 @@
   }
 
   async function setView(view, reload = true) {
-    const labels={chat:'与 Agent 对话',knowledge:'个人知识库',video:'视频总结',paper:'论文总结',research:'联网研究',library:'内容库',schedules:'定时任务',history:'运行记录',settings:'Agent 设置'};
+    const labels={chat:'与 Agent 对话',knowledge:'个人知识库',video:'视频总结',paper:'论文总结',library:'内容库',schedules:'定时任务',history:'运行记录',settings:'Agent 设置'};
     if(!Object.hasOwn(labels,view))view='chat';
     AgentControls.close();state.view=view;
     document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!=='view-'+view);
@@ -1096,12 +1095,6 @@
     if (!['https:', 'http:'].includes(url.protocol) || !allowed.includes(host) || url.username || url.password) throw new Error('当前支持 B 站和 YouTube 的公开视频链接。');
     return value;
   }
-
-  $('research-form').addEventListener('submit',async event=>{
-    event.preventDefault();const button=$('research-submit');button.disabled=true;inlineError('research-error');
-    try{const result=await api('/api/tasks','POST',{capability:'web_research',parameters:{topic:$('research-topic').value.trim(),max_sources:Number($('research-sources').value)},conversation_id:state.conversationId});state.tasks.unshift(result.task);renderTasks();ensurePolling();toast('研究任务已提交，报告会自动保存');}
-    catch(error){inlineError('research-error',error.message);}finally{button.disabled=!state.connected;}
-  });
 
   $('summary-form').addEventListener('submit', async (event) => {
     event.preventDefault();

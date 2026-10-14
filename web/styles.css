@@ -66,4 +66,4 @@
 @media(max-width: 800px) { .chat-control-panel { margin: 0 10px 12px; padding: 14px; } }
 
 /* Parallel conversation and feature navigation. */
-.sidebar{overflow-y:auto}.nav-list{flex-shrink:0}#research-form{padding:28px;margin-bottom:24px;display:grid;gap:14px}#view-research>.card:last-child{padding:24px}.settings-layout>#settings-form[hidden]{display:none!important}
+.sidebar{overflow-y:auto}.nav-list{flex-shrink:0}.settings-layout>#settings-form[hidden]{display:none!important}

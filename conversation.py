@@ -520,8 +520,6 @@ class ChatService:
         for metadata in self._tools():
             function = metadata["function"]
             name = function["name"]
-            if not web_enabled and name in {"run_web_research", "schedule_web_research"}:
-                continue
             registry.register(Tool(name, function["description"], function["parameters"],
                 lambda args, actions, tool_name=name: self._call(tool_name, args, actions),
                 "write" if name.startswith(("run_", "schedule_", "save_", "delete_", "restore_", "disable_")) else "read"))
@@ -577,7 +575,7 @@ class ChatService:
                 "个人知识库只由用户主动选择的归档提取写入，普通聊天不会自动入库。可查询已有知识延续学习；使用个人库时说明条目来源。"
                 "普通交流直接回答，需要最新信息、核对来源或用户要求联网时使用 search_web/read_webpage，多轮搜索阅读后综合回答。"
                 "重要结论在附近附 [来源标题](实际读取的网址)；不得编造引用、日期或将搜索摘要说成完整正文。区分事实、推断和未知。"
-                "用户要求深入研究或联网研究报告时调用 run_web_research，在后台完成并自动保存。"
+                "联网研究是你自身的能力，使用 search_web/read_webpage 规划检索、阅读正文、补充资料和综合回答。用户要求正式研究报告时，完成研究后用 save_generated_text 保存到普通笔记目录；不提交独立联网研究任务。"
                 "用户要求论文概述、提取贡献或关键知识时调用 run_paper_summary。接受公开论文链接、用户粘贴的原文或已上传的 PDF 附件编号。"
                 "文件仅使用用户上传并提供的 upload_id，不编造附件编号或本地路径。论文和视频成果分别保存在各自目录。"
                 "普通写作或知识笔记直接组织内容，用户要求生成正式文稿或保存回答时调用 save_generated_text。普通聊天保存在会话历史，不必每句另存文件。"

@@ -88,31 +88,14 @@ class VideoHarness(BusinessHarness):
         return result
 
 
-class ResearchHarness(BusinessHarness):
-    role, title = "web_research", "联网研究"
-    time_budget = 1200
-
-    def execute(self):
-        from web_research import research_report
-        from dataclasses import replace
-        context = replace(self.context, client=self.shared.model, progress=self.shared.progress, cancellation=self.shared.cancellation)
-        result = research_report(self.parameters, context)
-        result.update(self.shared.save_markdown(result["title"], result["markdown"], self.role))
-        return result
-
-    def verify(self):
-        result = super().verify()
-        pages = [source for source in self.result.get("sources", []) if source.get("kind") == "page"]
-        if not pages:
-            raise RuntimeError("研究报告没有成功读取的正文来源。")
-        if not all(source["url"] in self.result["markdown"] for source in pages):
-            raise RuntimeError("研究报告的来源记录不完整。")
-        return result
-
 
 class PaperHarness(BusinessHarness):
     role, title = "paper_summary", "论文总结"
     time_budget = 2400
+
+    def instructions(self):
+        from paper_summary import PAPER_SKILL_COMPATIBILITY
+        return super().instructions() + "\n\n" + PAPER_SKILL_COMPATIBILITY
 
     def task_description(self):
         # Keep the coordinator history small; original materials stay in its tool.
@@ -149,7 +132,7 @@ class PaperHarness(BusinessHarness):
         return result
 
 
-BUSINESS_HARNESSES = {"video_summary": VideoHarness, "web_research": ResearchHarness, "paper_summary": PaperHarness}
+BUSINESS_HARNESSES = {"video_summary": VideoHarness, "paper_summary": PaperHarness}
 
 
 def register_business_harness(capability_id, harness_type):

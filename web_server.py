@@ -620,13 +620,13 @@ class WebRuntime:
         for job in jobs:
             capability = job.get("capability") or "video_summary"
             job["capability"] = capability
-            job["capability_title"] = metadata.get(capability, {}).get("title", capability)
+            job["capability_title"] = metadata.get(capability, {}).get("title", FOLDERS.get(capability, capability))
         runs = self.store.recent_runs()
         for run in runs:
             job = by_id.get(run["job_id"], {})
             capability = run.get("capability") or job.get("capability") or "video_summary"
             run["capability"] = capability
-            run["capability_title"] = metadata.get(capability, {}).get("title", capability)
+            run["capability_title"] = metadata.get(capability, {}).get("title", FOLDERS.get(capability, capability))
             run.setdefault("parameters", job.get("parameters", {}))
         return {"jobs": jobs, "runs": runs}
 
