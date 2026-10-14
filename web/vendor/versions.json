@@ -1,0 +1,29 @@
+[
+  {
+    "name": "marked",
+    "version": "18.1.1",
+    "license": "MIT",
+    "file": "marked.umd.js",
+    "bytes": 47956,
+    "source": "https://registry.npmjs.org/marked/-/marked-18.1.1.tgz",
+    "integrity": "sha512-zEGgrtUG8crk+TrMacJSVABU4DYDDkS8uqgU3ohrn/2fW9C2AEfUrO3m6IhpIpQpl7YcVpiXXC9cSMWDANT3dg=="
+  },
+  {
+    "name": "mermaid",
+    "version": "12.1.0",
+    "license": "MIT",
+    "file": "mermaid.min.js",
+    "bytes": 5493176,
+    "source": "https://registry.npmjs.org/mermaid/-/mermaid-12.1.0.tgz",
+    "integrity": "sha512-wlVCp+8eTupfCeeFvoZNNiTuHrvag0P2jz/ILgb/f/6jkVokUefOcujefi8qUe/j2asHiSePncVsz/xzzA80LQ=="
+  },
+  {
+    "name": "dompurify",
+    "version": "3.4.17",
+    "license": "(MPL-2.0 OR Apache-2.0)",
+    "file": "purify.min.js",
+    "bytes": 29828,
+    "source": "https://registry.npmjs.org/dompurify/-/dompurify-3.4.17.tgz",
+    "integrity": "sha512-B/pSlYVHQ58kqISD/yDjuJ1yfzI34m1gF4lAod2bwSRhiN4K5Cl3H8Af7hqB2PmTL911tdEudnnXn5FnhRoz0w=="
+  }
+]

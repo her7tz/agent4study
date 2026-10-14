@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "capabilities": {
+    "video_summary": ["video-summary"],
+    "web_research": ["web-research"]
+  }
+}
