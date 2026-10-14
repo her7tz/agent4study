@@ -248,6 +248,7 @@ class KnowledgeService:
         self.settings_provider, self.logger = settings_provider, logger
         self.store = KnowledgeStore(settings_provider().data_home / "knowledge.sqlite3")
         self.pending, self.tokens = queue.Queue(), {}
+        self.executor=None
         self.lock, self.stopping = threading.Lock(), threading.Event()
         with self.connect() as db:
             db.execute("""CREATE TABLE IF NOT EXISTS knowledge_ingestions(
@@ -404,49 +405,57 @@ class KnowledgeService:
 
     def _worker(self):
         while not self.stopping.is_set():
+            try:job_id=self.pending.get(timeout=.5)
+            except queue.Empty:continue
             try:
-                job_id = self.pending.get(timeout=0.5)
-            except queue.Empty:
-                continue
+                if self.executor:self.executor.submit(self._process,job_id)
+                else:self._process(job_id)
+            except RuntimeError:
+                self._update(job_id,status='interrupted',stage='服务退出时知识任务未执行',finished_at=time.time())
+                with self.lock:self.tokens.pop(job_id,None)
+            finally:self.pending.task_done()
+
+    def _process(self,job_id):
+        with self.lock:
+            token = self.tokens.get(job_id)
+        job_secrets = []
+        try:
+            if token is None:
+                return
+            token.check()
+            with self.connect() as db:
+                row = db.execute("SELECT snapshot FROM knowledge_ingestions WHERE id=?", (job_id,)).fetchone()
+            snapshot = json.loads(row[0])
+            from agent_profiles import resolve_agent
+            settings = resolve_agent(self.settings_provider(),"conversation_knowledge")
+            job_secrets = list(settings._profile_secrets) + [settings.api_key]
+            self._update(job_id, status="running", stage="开始提取知识")
+            result = self.store.batch(job_id)
+            if result is None:
+                points = self._extract(snapshot, token, lambda stage: self._update(job_id, stage=stage), settings)
+                token.check()
+                result = self.store.ingest(job_id, snapshot, points)
+            token.check()
+            result = self._write_document(job_id, result)
+            stage = "已保存 1 份归档文档，整理 {} 条知识".format(result["count"]) if result["count"] else "未发现可复用的知识点，归档已保留"
+            self._update(job_id, status="completed", stage=stage, result=json.dumps(result), finished_at=time.time(), error=None)
+        except RunCancelled:
+            self._update(job_id, status="interrupted", stage="知识提取已中断，可重试", finished_at=time.time())
+        except Exception as exc:
+            from agent_profiles import AgentProfiles
+            secrets = AgentProfiles(self.settings_provider()).secrets()
+            detail = str(exc)
+            for value in secrets + job_secrets:
+                if value:
+                    detail = detail.replace(value, "[已隐藏凭证]")
+            self._update(job_id, status="failed", stage="知识提取失败，归档仍保留", error=detail[:1200], finished_at=time.time())
+            if self.logger:
+                self.logger.error("知识提取 %s 失败：%s", job_id, detail[:1200])
+        finally:
             with self.lock:
-                token = self.tokens.get(job_id)
-            job_secrets = []
-            try:
-                if token is None:
-                    continue
-                token.check()
-                with self.connect() as db:
-                    row = db.execute("SELECT snapshot FROM knowledge_ingestions WHERE id=?", (job_id,)).fetchone()
-                snapshot = json.loads(row[0])
-                from agent_profiles import resolve_agent
-                settings = resolve_agent(self.settings_provider(),"conversation_knowledge")
-                job_secrets = list(settings._profile_secrets) + [settings.api_key]
-                self._update(job_id, status="running", stage="开始提取知识")
-                result = self.store.batch(job_id)
-                if result is None:
-                    points = self._extract(snapshot, token, lambda stage: self._update(job_id, stage=stage), settings)
-                    token.check()
-                    result = self.store.ingest(job_id, snapshot, points)
-                token.check()
-                result = self._write_document(job_id, result)
-                stage = "已保存 1 份归档文档，整理 {} 条知识".format(result["count"]) if result["count"] else "未发现可复用的知识点，归档已保留"
-                self._update(job_id, status="completed", stage=stage, result=json.dumps(result), finished_at=time.time(), error=None)
-            except RunCancelled:
-                self._update(job_id, status="interrupted", stage="知识提取已中断，可重试", finished_at=time.time())
-            except Exception as exc:
-                from agent_profiles import AgentProfiles
-                secrets = AgentProfiles(self.settings_provider()).secrets()
-                detail = str(exc)
-                for value in secrets + job_secrets:
-                    if value:
-                        detail = detail.replace(value, "[已隐藏凭证]")
-                self._update(job_id, status="failed", stage="知识提取失败，归档仍保留", error=detail[:1200], finished_at=time.time())
-                if self.logger:
-                    self.logger.error("知识提取 %s 失败：%s", job_id, detail[:1200])
-            finally:
-                with self.lock:
-                    self.tokens.pop(job_id, None)
-                self.pending.task_done()
+                self.tokens.pop(job_id, None)
+
+
 
     def close(self):
         self.stopping.set()

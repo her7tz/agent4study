@@ -25,7 +25,7 @@ class SchedulingTests(unittest.TestCase):
 
     def tearDown(self):
         self.scheduler.close()
-        self.scheduler.worker.join(timeout=2)
+        self.scheduler.join(timeout=2)
         self.folder.cleanup()
 
     def test_only_one_scheduler_can_hold_the_shared_lease(self):

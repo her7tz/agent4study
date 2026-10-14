@@ -24,6 +24,7 @@ from agent_profiles import AgentProfiles, resolve_agent, redact
 from site_sessions import SiteSessions
 from knowledge_context import retrieve_context
 
+_CURRENT_CANCELLATION=contextvars.ContextVar("conversation_cancellation",default=None)
 _CURRENT_CONVERSATION = contextvars.ContextVar("current_conversation", default=None)
 
 
@@ -379,15 +380,15 @@ class ChatService:
         tools = []
         for capability in list_capabilities():
             tools.append({"type": "function", "function": {
-                "name": "run_" + capability["id"], "description": "立即提交后台任务：" + capability["description"],
-                "parameters": capability["input_schema"]}})
-            tools.append({"type": "function", "function": {
                 "name": "schedule_" + capability["id"], "description": "定时执行：" + capability["description"],
                 "parameters": {"type": "object", "properties": {
                     "parameters": capability["input_schema"], "cadence": {"type": "string", "enum": ["once", "daily"]},
                     "time": {"type": "string", "description": "单次为 YYYY-MM-DD HH:MM，每日为 HH:MM，均使用 Asia/Shanghai"}},
                     "required": ["parameters", "cadence", "time"], "additionalProperties": False}}})
         definitions = [
+            ("list_subagents","查询 Subagent 的职责、拥有的能力和工具，以及独立配置。",{},[]),
+            ("delegate_subagents","并行委派多个独立任务给 Subagent。先查询 Agent 的能力，agent_id 与 capability 必须匹配。一次至多 8 个任务。",{"tasks":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"object","properties":{"agent_id":{"type":"string"},"capability":{"type":"string"},"parameters":{"type":"object","additionalProperties":True}},"required":["agent_id","capability","parameters"],"additionalProperties":False}}},["tasks"]),
+            ("read_subagent_results","读取已委派任务的实际状态与成果摘要，全部完成后可基于结果汇总分析。",{"task_ids":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"string"}},"wait_seconds":{"type":"integer","minimum":0,"maximum":15,"default":0}},["task_ids"]),
             ("show_agent_settings", "在对话中打开主 Agent 或指定 Subagent 的安全配置卡片。密钥由用户在卡片填写，不得索取聊天中的凭证。", {"role": {"type":"string"}}, []),
             ("list_agent_configurations", "查询各 Agent 的有效模型、Skills 和配置来源，不返回密钥。", {}, []),
             ("update_agent_configuration", "按用户要求调整 Agent 模型或 Skills；API Key 必须由用户在安全卡片填写。", {"role":{"type":"string"},"model":{"type":"string"},"provider":{"type":"string"},"skills":{"type":"array","items":{"type":"string"}},"inherit":{"type":"array","items":{"type":"string"}}}, ["role"]),
@@ -417,8 +418,32 @@ class ChatService:
 
     def _call(self, name, arguments, actions):
         profiles = AgentProfiles(self.settings_provider())
+        if name=='list_subagents':
+            from agent_registry import registry as agents
+            return {'agents':[agent.metadata() for agent in agents.all()]}
+        if name=='delegate_subagents':
+            if not getattr(self,'create_delegations',None):raise ValueError('当前入口不支持后台委派。')
+            result=self.create_delegations({**arguments,'conversation_id':_CURRENT_CONVERSATION.get()})
+            actions.extend({'type':'task','task_id':task['id'],'title':task['title'],'capability':task['capability'],'agent_id':task['agent_id'],'group_id':result['group_id']} for task in result['tasks'])
+            return {'group_id':result['group_id'],'parallel_limit':result['parallel_limit'],'tasks':[{k:task.get(k) for k in ('id','agent_id','capability','status')} for task in result['tasks']],'notice':'已委派；应读取实际结果再汇总，尚未完成的任务会继续在后台执行。'}
+        if name=='read_subagent_results':
+            deadline=time.monotonic()+arguments.get('wait_seconds',0)
+            token=_CURRENT_CANCELLATION.get()
+            while True:
+                if token:token.check()
+                results=[]
+                for task_id in arguments['task_ids']:
+                    task=self.task_lookup(task_id,with_markdown=True)
+                    if not task or task.get('conversation_id')!=_CURRENT_CONVERSATION.get():raise ValueError('只能读取本次对话所委派的任务。')
+                    item={k:task.get(k) for k in ('id','agent_id','group_id','title','status','stage','error','output_file')}
+                    item['content']=(task.get('markdown') or '')[:6000]
+                    results.append(item)
+                pending=any(item['status'] in {'queued','running'} for item in results)
+                if not pending or time.monotonic()>=deadline:return {'tasks':results,'ready':all(item['status'] in {'completed','failed','cancelled','interrupted'} for item in results),'needs_input':any(item['status']=='waiting_user' for item in results),'all_succeeded':all(item['status']=='completed' for item in results)}
+                time.sleep(.25)
         if name == "show_agent_settings":
-            role = arguments.get("role", "global")
+            from agent_profiles import canonical
+            role = canonical(arguments.get("role", "global"))
             if role not in {a["role"] for a in profiles.list()["agents"]}: raise ValueError("没有注册该 Agent。")
             actions.append({"type":"agent_settings", "role":role})
             return {"shown":True,"agent":profiles.public(role),"notice":"在对话安全卡片中填写凭证。"}
@@ -564,6 +589,7 @@ class ChatService:
         registry = self._registry(web, web_enabled)
         actions = []
         marker = _CURRENT_CONVERSATION.set(conversation_id)
+        cancellation_marker=_CURRENT_CANCELLATION.set(token)
         partial = ""
         try:
             if not acquired_lock:
@@ -576,10 +602,12 @@ class ChatService:
                 "普通交流直接回答，需要最新信息、核对来源或用户要求联网时使用 search_web/read_webpage，多轮搜索阅读后综合回答。"
                 "重要结论在附近附 [来源标题](实际读取的网址)；不得编造引用、日期或将搜索摘要说成完整正文。区分事实、推断和未知。"
                 "联网研究是你自身的能力，使用 search_web/read_webpage 规划检索、阅读正文、补充资料和综合回答。用户要求正式研究报告时，完成研究后用 save_generated_text 保存到普通笔记目录；不提交独立联网研究任务。"
-                "用户要求论文概述、提取贡献或关键知识时调用 run_paper_summary。接受公开论文链接、用户粘贴的原文或已上传的 PDF 附件编号。"
+                "用户要求论文概述、提取贡献或关键知识时，用 delegate_subagents 委派给 paper_reading，选择其 paper_summary 能力。接受公开论文链接、用户粘贴的原文或已上传的 PDF 附件编号。"
                 "文件仅使用用户上传并提供的 upload_id，不编造附件编号或本地路径。论文和视频成果分别保存在各自目录。"
                 "普通写作或知识笔记直接组织内容，用户要求生成正式文稿或保存回答时调用 save_generated_text。普通聊天保存在会话历史，不必每句另存文件。"
-                "通过注册工具立即执行功能、安排定时任务、查询读取内容库或将文本移入回收站。"
+                "先以 Subagent 为组织单位：list_subagents 查看其职责和拥有的工具，delegate_subagents 委派任务。多个互相独立的论文或视频任务应在一次批量委派中并行提交；有数据依赖的任务先等前置结果，不能盲目并行。"
+                "用 read_subagent_results 读取真实结果后再比较或汇总；任务未结束时说明当前状态，结果仍会回到对话。每个 Subagent 有自己的页面、模型、Skills、历史与执行轨迹。"
+                "通过注册工具安排定时任务、查询读取内容库或将文本移入回收站。"
                 "用户提供必要参数并要求执行时直接调用；缺少参数或目标不明确时询问，不能猜测视频链接或删除对象。"
                 "相对日期按当前 Asia/Shanghai 时间计算：" + now + "。"
                 "任务提交仅代表已排队，不能说已经完成。文本完成后自动保存，用户无需每次下载。"
@@ -707,7 +735,12 @@ class ChatService:
                             labels = {"list_generated_texts": "正在查询内容库…", "read_generated_text": "正在读取笔记…", "delete_generated_texts": "正在移入回收站…", "list_deleted_texts": "正在查询回收站…", "restore_generated_texts": "正在恢复笔记…", "list_scheduled_tasks": "正在查询定时任务…", "list_current_tasks": "正在查询执行进度…", "disable_scheduled_task": "正在停用定时任务…", "cancel_task": "正在取消任务…"}
                             label = "正在安排" + titles[capability_id] + "…" if capability_id in titles else labels.get(name, "正在读取资料…")
                             emit({"type": "status", "text": label})
+                            emit({'type':'tool','name':name,'phase':'started'})
                             cache[key] = shared.execute_tool(registry, name, arguments, actions)
+                            emit({'type':'tool','name':name,'phase':'completed'})
+                            actions.append({'type':'activity','name':name,'status':'completed'})
+                        elif name=='delegate_subagents':
+                            actions.extend({'type':'task','task_id':item['id'],'agent_id':item.get('agent_id'),'capability':item.get('capability'),'group_id':cache[key].get('group_id')} for item in cache[key].get('tasks',[]))
                         elif name.startswith("run_") and cache[key].get("task_id"):
                             actions.append({"type": "task", "task_id": cache[key]["task_id"], "capability": name[4:]})
                         elif name.startswith("schedule_") and cache[key].get("job_id"):
@@ -720,6 +753,8 @@ class ChatService:
                         result = {"cancelled": True, "success": False}
                     except Exception as exc:
                         result = {"error": redact(settings, exc)[:1600], "success": False}
+                        emit({'type':'tool','name':name,'phase':'failed'})
+                        actions.append({'type':'activity','name':name,'status':'failed'})
                     raw_tool = {"role": "tool", "tool_call_id": call.get("id", ""), "content": json.dumps(result, ensure_ascii=False)}
                     self._save(conversation_id, raw_tool)
                     messages.append(raw_tool)
@@ -748,5 +783,6 @@ class ChatService:
             raise ConversationError(502, detail) from exc
         finally:
             _CURRENT_CONVERSATION.reset(marker)
+            _CURRENT_CANCELLATION.reset(cancellation_marker)
             if acquired_lock is None:
                 lock.release()

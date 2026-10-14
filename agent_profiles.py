@@ -15,8 +15,23 @@ class ProfileError(ValueError):
 
 
 def roles():
-    from capabilities import list_capabilities
-    return {'global': '主 Agent / 默认配置', **{c['id']: c['title'] for c in list_capabilities()}, 'conversation_knowledge': '知识归档'}
+    from agent_registry import registry
+    return {'global':'主 Agent / 默认配置',**{a.id:a.title for a in registry.all()}}
+
+
+def canonical(role):
+    from agent_registry import canonical_role
+    try:return canonical_role(role)
+    except ValueError as exc:raise ProfileError(str(exc)) from exc
+
+
+def profile_for(data,role):
+    if role in data:return data[role]
+    if role not in {'global','conversation'}:
+        from agent_registry import registry
+        for old in registry.get(role).legacy_roles:
+            if old in data:return data[old]
+    return {}
 
 
 def available_skills():
@@ -24,17 +39,25 @@ def available_skills():
 
 
 def defaults(role):
+    if role not in {'global','conversation'}:
+        from agent_registry import registry
+        return list(registry.get(role).skills)
     return json.loads((SKILLS_DIR/'config.json').read_text(encoding='utf-8'))['capabilities'].get(role, [])
 
 
 def read_skill(settings, name, role="global"):
     if name not in available_skills():
         raise ProfileError('没有找到该 Skill。')
-    role = "global" if role == "conversation" else role
+    role = "global" if role == "conversation" else canonical(role)
     if role not in roles(): raise ProfileError("没有注册该 Agent。")
     override = settings.data_home/"skill-overrides"/role/(name+".md")
     global_override = settings.data_home/"skill-overrides"/"global"/(name+".md")
-    path = override if override.exists() else global_override if global_override.exists() else SKILLS_DIR/name/"SKILL.md"
+    legacy=[]
+    if role!='global':
+        from agent_registry import registry
+        legacy=[settings.data_home/'skill-overrides'/old/(name+'.md') for old in registry.get(role).legacy_roles]
+    candidates=[override]+legacy+[global_override,SKILLS_DIR/name/'SKILL.md']
+    path=next(path for path in candidates if path.exists())
     if path.is_symlink() or path.parent.is_symlink() or path.parent.parent.is_symlink():
         raise ProfileError('Skill 文件不使用符号链接。')
     return path.read_text(encoding='utf-8')
@@ -57,16 +80,17 @@ class AgentProfiles:
             return [self.settings.api_key] + [v['api_key'] for v in self._read().values() if v.get('api_key')]
 
     def resolve(self, role):
+        role=canonical(role)
         if getattr(self.settings, '_profile_role', None) == role:
             return self.settings
         if role not in roles() and role != 'conversation':
             raise ProfileError('没有注册这个 Agent。')
         with LOCK:
             profiles = self._read()
-            profile = profiles.get(role, {}) if role != 'conversation' else {}
+            profile = profile_for(profiles,role) if role != 'conversation' else {}
             global_profile = profiles.get('global', {})
             result = copy.copy(self.settings)
-            result.provider = profile.get('provider', 'deepseek')
+            result.provider = profile.get('provider', global_profile.get('provider', 'deepseek'))
             result.api_key = profile.get('api_key', self.settings.api_key)
             result.model = profile.get('model', self.settings.model)
             names = list(profile.get('skills', global_profile.get('skills', defaults(role))))
@@ -78,11 +102,12 @@ class AgentProfiles:
             return result
 
     def public(self, role, profiles=None):
+        role=canonical(role)
         profiles = self._read() if profiles is None else profiles
-        profile = profiles.get(role, {}) if role != 'global' else profiles.get('global', {})
+        profile = profile_for(profiles,role)
         names = profile.get('skills', profiles.get('global', {}).get('skills', defaults(role)))
         return {'role': role, 'title': roles().get(role, role),
-            'provider': profile.get('provider', 'deepseek'), 'model': profile.get('model', self.settings.model),
+            'provider': profile.get('provider', profiles.get('global', {}).get('provider', 'deepseek')), 'model': profile.get('model', self.settings.model),
             'api_key_configured': bool(profile.get('api_key', self.settings.api_key)), 'skills': names,
             'sources': {key: ('independent' if key in profile and role != 'global' else 'default') for key in ('provider','model','api_key','skills')},
             'skill_source': 'independent' if 'skills' in profile else 'global' if 'skills' in profiles.get('global', {}) else 'business_default'}
@@ -93,13 +118,14 @@ class AgentProfiles:
             return {'agents': [self.public(role, data) for role in roles()], 'available_skills': available_skills(), 'providers': list(PROVIDERS)}
 
     def update(self, role, body):
+        role=canonical(role)
         if role not in roles() or not isinstance(body, dict) or set(body)-{'provider','model','api_key','skills','inherit'}:
             raise ProfileError('Agent 配置字段无效。')
         inherit = body.get('inherit', [])
         if not isinstance(inherit, list) or any(key not in {'provider','model','api_key','skills'} for key in inherit):
             raise ProfileError('继承字段无效。')
         with LOCK:
-            data = self._read(); profile = dict(data.get(role, {}))
+            data = self._read(); profile = dict(profile_for(data,role))
             for key in inherit: profile.pop(key, None)
             for key in ('provider','model','api_key','skills'):
                 if key not in body: continue
@@ -117,6 +143,7 @@ class AgentProfiles:
             return self.public(role,data)
 
     def write_skill(self, name, content, role="global"):
+        role=canonical(role)
         if role not in roles(): raise ProfileError("没有注册该 Agent。")
         if name not in available_skills() or not isinstance(content,str) or not content.strip() or len(content)>30000:
             raise ProfileError('Skill 需要有效名称和 1 至 30000 字的规则。')

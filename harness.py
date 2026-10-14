@@ -33,7 +33,11 @@ _SKILL_CONTEXT = contextvars.ContextVar("skill_snapshot", default={})
 @contextmanager
 def skill_snapshot(settings):
     role = getattr(settings, "_profile_role", None)
-    marker = _SKILL_CONTEXT.set({role: settings.skill_instructions} if role else {})
+    snapshot={role:settings.skill_instructions} if role else {}
+    if role and role not in {'global','conversation'}:
+        from agent_registry import registry
+        snapshot.update({name:settings.skill_instructions for name in registry.get(role).operations})
+    marker = _SKILL_CONTEXT.set(snapshot)
     try:
         yield
     finally:
@@ -166,6 +170,8 @@ class Settings:
             "DEEPSEEK_MODEL", file_values.get("DEEPSEEK_MODEL", DEFAULT_MODEL)
         ).strip()
         self.base_url = DEFAULT_BASE_URL
+        self.max_parallel_tasks=int(os.environ.get('MINIMAL_AGENT_MAX_PARALLEL','4'))
+        if not 1<=self.max_parallel_tasks<=16:raise ValueError('MINIMAL_AGENT_MAX_PARALLEL 必须为 1 至 16。')
         self.output_dir = Path(
             os.environ.get("MINIMAL_AGENT_OUTPUT", str(Path.cwd() / "summaries"))
         ).expanduser()

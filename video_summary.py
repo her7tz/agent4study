@@ -295,7 +295,17 @@ def _download_audio(url: str, folder: Path) -> Path:
     return max(candidates, key=lambda path: path.stat().st_size)
 
 
-def _transcribe_audio(audio_path: Path) -> Tuple[List[Dict[str, Any]], str]:
+import threading,uuid
+_ASR_SLOTS=threading.BoundedSemaphore(1)
+
+def _transcribe_audio(audio_path):
+    while not _ASR_SLOTS.acquire(timeout=.25):_check_cancelled()
+    try:
+        _check_cancelled()
+        return _transcribe_audio_unlocked(audio_path)
+    finally:_ASR_SLOTS.release()
+
+def _transcribe_audio_unlocked(audio_path: Path) -> Tuple[List[Dict[str, Any]], str]:
     try:
         from faster_whisper import WhisperModel
     except ImportError as exc:
@@ -768,7 +778,7 @@ def summarize_video(
         plan = _plan_summary(client, material, skill_instructions)
         stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime()) + "-{}".format(
             int((time.time() % 1) * 1000)
-        )
+        ) + '-' + uuid.uuid4().hex[:8]
         output_file = Path(output_path).expanduser() if output_path else (
             output_dir / "{}_{}.md".format(_slug(str(info.get("id", "video"))), stamp)
         )

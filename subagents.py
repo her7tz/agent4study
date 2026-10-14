@@ -3,7 +3,7 @@
 import json
 import time
 
-from business_harnesses import BUSINESS_HARNESSES
+from agent_registry import registry
 from runtime_control import RunCancelled
 
 
@@ -14,10 +14,11 @@ def run_business_subagent(capability_id, parameters, context):
 
 
 def _run_business_subagent(capability_id, parameters, context):
-    harness = BUSINESS_HARNESSES[capability_id](parameters, context)
+    agent = registry.owner(capability_id)
+    harness = agent.operations[capability_id](parameters, context)
     shared = harness.shared
     messages = [{"role": "system", "content": harness.instructions()},
-                {"role": "user", "content": json.dumps({"goal": harness.title, "parameters": harness.task_description()}, ensure_ascii=False)}]
+                {"role": "user", "content": json.dumps({"agent":agent.id,"goal": harness.title, "parameters": harness.task_description()}, ensure_ascii=False)}]
     deadline = time.monotonic() + harness.time_budget
     production_error = None
     try:
@@ -65,7 +66,7 @@ def _run_business_subagent(capability_id, parameters, context):
         if not harness.finished:
             raise RuntimeError(harness.title + "未通过完成检查。" + ("处理原因：" + production_error if production_error else "请查看运行记录后重试。"))
         result = dict(harness.result)
-        result["subagent"] = {"role": capability_id, "run_id": shared.run_id, "verified": True}
+        result["subagent"] = {"role": agent.id, "operation":capability_id, "run_id": shared.run_id, "verified": True}
         return result
     except RunCancelled:
         shared.trace("cancelled")

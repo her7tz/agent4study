@@ -4,7 +4,7 @@
   const $ = (id) => document.getElementById(id);
   const icons = (name) => `<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
   const escapeHTML = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
-  const state = { status: null, capabilities: [], tasks: [], reports: [], jobs: [], runs: [], view: 'chat', currentTask: null, currentTaskId: null, activeReport: null, historyFilter: 'all', pollTimer: null, polling: false, connected: false, submitting: false, loading: false, resultVersion: 0, resultSignature: '', resultDownloadUrl: null, exportReady: false, exporting: false, scheduleSignature: '', scheduleDrafts: {}, conversationId: null, messages: [], chatBusy: false };
+  const state = { status: null, capabilities: [], agents:[], parallel:{limit:4}, tasks: [], reports: [], jobs: [], runs: [], view: 'chat', currentTask: null, currentTaskId: null, activeReport: null, historyFilter: 'all', pollTimer: null, polling: false, connected: false, submitting: false, loading: false, resultVersion: 0, resultSignature: '', resultDownloadUrl: null, exportReady: false, exporting: false, scheduleSignature: '', scheduleDrafts: {}, conversationId: null, messages: [], chatBusy: false };
   const activeStatuses = new Set(['queued', 'running']);
   const statusNames = { queued: '等待处理', running: '处理中', completed: '已完成', failed: '执行失败', interrupted: '已中断', waiting_user: '等待论文材料', cancelled: '已取消', missed: '已跳过', deleted: '已移入回收站' };
   Object.assign(state, {conversations: [], chatRunId: null, watchGeneration: 0, chatSources: [], conversationEdit: null});
@@ -411,7 +411,7 @@
     $('knowledge-count').textContent=data.entries.length===data.total?`${data.total} 条`:`显示 ${data.entries.length} 条 · 共 ${data.total} 条`;
     $('knowledge-list').innerHTML=data.entries.length ? data.entries.map(entry=>`<button type="button" class="card knowledge-card" data-knowledge-open="${escapeHTML(entry.id)}"><h3>${escapeHTML(entry.title)}</h3><div class="knowledge-tags">${entry.tags.map(tag=>`<span>${escapeHTML(tag)}</span>`).join('')}</div><p>${escapeHTML(entry.excerpt)}</p><small>${escapeHTML(formatTime(entry.updated_at,true))} · 查看知识与来源</small></button>`).join('') : emptyState('知识从一次归档开始','归档对话时选择“整理知识并入库”，知识点就会出现在这里。','file');
     $('knowledge-trash-list').innerHTML=trash.entries.map(entry=>`<div class="library-row"><strong>${escapeHTML(entry.title)}</strong><button class="text-button" type="button" data-knowledge-restore="${escapeHTML(entry.id)}">恢复</button></div>`).join('') || '<p class="field-help">知识回收站为空。</p>';
-    state.knowledgeJobs=jobs.jobs||[];
+    state.knowledgeJobs=jobs.jobs||[];AgentConsole.render();
     const visible=state.knowledgeJobs.filter(job=>['queued','running','failed','interrupted'].includes(job.status)).slice(0,8);
     $('knowledge-jobs').innerHTML=visible.map(job=>`<div class="notice ${job.status==='failed'?'notice-warning':'notice-subtle'}"><div><strong>${escapeHTML(job.stage)}</strong>${job.error?`<p>${escapeHTML(job.error)}</p>`:''}<button class="text-button" type="button" data-conversation="${escapeHTML(job.conversation_id)}">查看来源会话</button>${['failed','interrupted'].includes(job.status)?`<button class="text-button" type="button" data-knowledge-retry="${escapeHTML(job.id)}">重试提取</button>`:''}</div></div>`).join('');
     ensureKnowledgePolling();
@@ -445,7 +445,8 @@
           if (event.type === 'round') draft.content = '';
           if (event.type === 'delta') draft.content += event.text;
           if (event.type === 'status') $('chat-stage').textContent = event.text;
-          if (event.type === 'sources') draft.actions = (event.sources || []).map(source => ({type:'source', ...source}));
+          if(event.type==='tool'){draft.actions=draft.actions.filter(action=>action.type!=='activity'||action.name!==event.name);draft.actions.push({type:'activity',name:event.name,status:event.phase});}
+          if (event.type === 'sources') draft.actions = draft.actions.filter(action=>action.type==='activity').concat((event.sources || []).map(source => ({type:'source', ...source})));
         }
         renderChat();
         if (data.conversation) {
@@ -464,6 +465,7 @@
   }
 
   async function submitChat(message, retry=false) {
+    if(!retry&&message.trim().startsWith('/')){try{if(await AgentConsole.command(message)){$('chat-input').value='';return;}}catch(error){inlineError('chat-error',error.message);return;}}
     if (state.chatBusy) return;
     inlineError('chat-error');
     state.chatBusy = true; updateSubmitState();
@@ -515,6 +517,7 @@
         const actions = document.createElement('div');
         actions.className = 'chat-actions';
         for (const action of message.actions) {
+          if(action.type==='activity'){const line=document.createElement('code');line.className='terminal-tool-line';line.textContent='[tool] '+action.name+' · '+action.status;actions.append(line);continue;}
           if (action.type === 'source') {
             try {
               const url = new URL(action.url);
@@ -892,7 +895,7 @@
         if (task.status !== 'completed') toast(task.status === 'deleted' ? '这份内容已移入回收站，可在内容库恢复。' : task.stage || statusNames[task.status]);
         return;
       }
-      if(['knowledge','history','library','settings','schedules'].includes(state.view)) { if(task.status!=='completed')toast(task.stage||statusNames[task.status]);return; }
+      if(['knowledge','archivist','history','library','settings','schedules'].includes(state.view)) { if(task.status!=='completed')toast(task.stage||statusNames[task.status]);return; }
       const destination=task.capability==='paper_summary'?'paper':'video';
       await setView(destination, false);
       ($('result-card').hidden ? $(destination==='paper'?'paper-progress-card':'progress-card') : $('result-card')).scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -914,6 +917,7 @@
   }
 
   function renderTasks() {
+    AgentConsole.render();
     const active = state.tasks.filter((task) => activeStatuses.has(task.status));
     $('active-task-count').hidden = !active.length;
     $('active-task-count').textContent = active.length;
@@ -945,7 +949,7 @@
       const before = new Set(state.tasks.filter((task) => activeStatuses.has(task.status)).map((task) => task.id));
       const previousTasks=new Map(state.tasks.map(task=>[task.id,task.status+':'+task.stage+':'+task.attempt]));
       const previousRuns = new Map(state.runs.map((run) => [run.id, run.status]));
-      const [data, schedules] = await Promise.all([api('/api/tasks'), api('/api/schedules')]);
+      const [data, schedules,agents] = await Promise.all([api('/api/tasks'),api('/api/schedules'),api('/api/subagents')]);state.agents=agents.agents||[];state.parallel=agents.parallel;
       state.jobs = schedules.jobs || [];
       state.runs = schedules.runs || [];
       renderSchedules();
@@ -1033,7 +1037,7 @@
       state.status = status;
       setConnection(true);
       renderStatus();
-      const results = await Promise.allSettled([api('/api/tasks'), api('/api/reports'), api('/api/schedules'), api('/api/capabilities'), state.chatBusy ? Promise.resolve(null) : api('/api/conversations/current')]);
+      const results = await Promise.allSettled([api('/api/tasks'), api('/api/reports'), api('/api/schedules'), api('/api/capabilities'), state.chatBusy ? Promise.resolve(null) : api('/api/conversations/current'),api('/api/subagents')]);
       if (results[0].status === 'fulfilled') state.tasks = results[0].value.tasks || [];
       if (results[1].status === 'fulfilled') state.reports = results[1].value.reports || [];
       if (results[2].status === 'fulfilled') {
@@ -1045,6 +1049,7 @@
         renderCapabilities();
       }
       if (results[4].status === 'fulfilled' && results[4].value && !state.chatBusy) applyConversation(results[4].value);
+      if(results[5]?.status==='fulfilled'){state.agents=results[5].value.agents||[];state.parallel=results[5].value.parallel;}
       renderReports();
       renderSchedules();
       renderTasks();
@@ -1067,7 +1072,8 @@
   }
 
   async function setView(view, reload = true) {
-    const labels={chat:'与 Agent 对话',knowledge:'个人知识库',video:'视频总结',paper:'论文总结',library:'内容库',schedules:'定时任务',history:'运行记录',settings:'Agent 设置'};
+    const labels={chat:'主 Agent 控制台',archivist:'知识整理 Agent',knowledge:'个人知识库',video:'视频学习 Agent',paper:'论文阅读 Agent',library:'内容库',schedules:'定时任务',history:'运行记录',settings:'Agent 设置'};
+    for(const agent of state.agents)labels[agent.page]=agent.title;
     if(!Object.hasOwn(labels,view))view='chat';
     AgentControls.close();state.view=view;
     document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!=='view-'+view);
@@ -1080,7 +1086,7 @@
       if(view==='settings')await AgentControls.profiles('global',$('standalone-agent-settings'));
       if(['video','paper'].includes(view)){const capability=view==='paper'?'paper_summary':'video_summary';if(state.currentTask?.capability!==capability)state.currentTask=state.tasks.find(task=>task.capability===capability)||null;state.currentTaskId=state.currentTask?.id||null;renderProgress();}
       if(view==='library')await refreshLibrary();
-      if(view==='knowledge')await refreshKnowledge();
+      if(['knowledge','archivist'].includes(view))await refreshKnowledge();
       if(view==='chat'&&reload)await refreshConversation();
       if(['schedules','history'].includes(view)&&reload)await refreshSchedules();
     }catch(error){toast(error.message,true);}
@@ -1388,6 +1394,7 @@
   materialInput.addEventListener('change',async()=>{const taskId=state.materialTaskId,file=materialInput.files[0];materialInput.value='';if(!file||!taskId)return;
     try{const paper=await uploadPaper(file);await api('/api/tasks/'+encodeURIComponent(taskId)+'/resume','POST',{upload_id:paper.upload_id});await refreshAll();toast('PDF 已导入，原任务继续处理');}catch(error){toast(error.message,true);}
   });
+  AgentConsole.init({api,state,setView,toast});
   AgentControls.init({api,state,toast,refresh:async(name)=>{
     if(!name)return refreshAll();if(name==='library')return refreshLibrary();if(name==='knowledge')return refreshKnowledge();
     if(['schedules','history'].includes(name)){await refreshSchedules();const tasks=await api('/api/tasks');state.tasks=tasks.tasks||[];renderTasks();return;}

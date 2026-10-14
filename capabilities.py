@@ -56,12 +56,12 @@ def _validate_schema(value: Any, schema: Dict[str, Any], field: str) -> Any:
         required = schema.get("required", [])
         unknown = set(value) - set(properties)
         # Inputs are closed by default, including schemas without this keyword.
-        if unknown:
+        if unknown and schema.get("additionalProperties") is not True:
             raise ValueError("{} 包含未知字段：{}。".format(field, ", ".join(sorted(map(str, unknown)))))
         missing = [name for name in required if name not in value]
         if missing:
             raise ValueError("{} 缺少必填字段：{}。".format(field, ", ".join(missing)))
-        result: Dict[str, Any] = {}
+        result: Dict[str, Any] = {key: copy.deepcopy(value[key]) for key in unknown} if schema.get("additionalProperties") is True else {}
         for name, subschema in properties.items():
             if name in value:
                 result[name] = _validate_schema(value[name], subschema, "{}.{}".format(field, name))
@@ -95,7 +95,10 @@ class Capability:
     validator: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None
 
     def metadata(self) -> Dict[str, Any]:
-        return {
+        from agent_registry import registry as agents
+        try:owner=agents.owner(self.id).id
+        except ValueError:owner=None
+        return {"agent_id":owner,
             "id": self.id,
             "title": self.title,
             "description": self.description,
@@ -141,7 +144,8 @@ class CapabilityRegistry:
             context.cancellation.check()
         from storage_layout import feature_directory
         from agent_profiles import resolve_agent
-        scoped_settings = copy.copy(resolve_agent(context.settings, capability_id))
+        from agent_registry import registry as agents
+        scoped_settings = copy.copy(resolve_agent(context.settings, agents.owner(capability_id).id))
         scoped_settings.library_root = getattr(context.settings, "library_root", context.settings.output_dir)
         scoped_settings.output_dir = feature_directory(context.settings.output_dir, capability_id)
         supplied = context.client

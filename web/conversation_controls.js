@@ -3,7 +3,7 @@ window.AgentControls = (() => {
   const $ = id => document.getElementById(id);
   const escape = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   let api, state, refresh, toast, role='global', agents=[], available=[];
-  let borrowed=null, placeholder=null, standalone=null, host=null;
+  let borrowed=null, placeholder=null, standalone=null, host=null, roleLocked=false;
   function mount(title, target=null) {
     restore();
     if(standalone){standalone.replaceChildren();standalone=null;}
@@ -15,9 +15,9 @@ window.AgentControls = (() => {
     if(borrowed&&placeholder){borrowed.hidden=true;borrowed.classList.remove('conversation-panel');placeholder.replaceWith(borrowed);borrowed=null;placeholder=null;}
   }
   function close() { restore();if(standalone){standalone.replaceChildren();standalone=null;}$('chat-control-panel').hidden=true;$('chat-panel-body').replaceChildren(); }
-  async function profiles(selected='global', target=null) {
+  async function profiles(selected='global', target=null, fixedRole=false) {
     const data=await api('/api/agent-profiles');agents=data.agents||[];available=data.available_skills||[];
-    role=agents.some(a=>a.role===selected)?selected:'global';mount('配置 Agent',target);renderProfile();
+    roleLocked=fixedRole;role=agents.some(a=>a.role===selected)?selected:'global';mount('配置 Agent',target);renderProfile();
   }
   function renderProfile() {
     const agent=agents.find(a=>a.role===role),global=role==='global';
@@ -37,6 +37,7 @@ window.AgentControls = (() => {
         else $(field==='api_key'?'profile-key':'profile-'+field).disabled=checkbox.checked;};
       checkbox.addEventListener('change',update);update();
     }
+    $('profile-role').disabled=roleLocked;
     $('profile-role').addEventListener('change',()=>{role=$('profile-role').value;renderProfile();});
     $('agent-profile-form').addEventListener('submit',async event=>{
       event.preventDefault();const button=event.submitter;button.disabled=true;$('profile-error').hidden=true;
@@ -45,7 +46,7 @@ window.AgentControls = (() => {
         if(field==='skills')body.skills=[...document.querySelectorAll('[data-profile-skill]:checked')].map(i=>i.dataset.profileSkill);
         else body[field]=$(field==='api_key'?'profile-key':'profile-'+field).value.trim();
       }
-      await api('/api/agent-profiles/'+encodeURIComponent(role),'POST',body);$('profile-key').value='';await refresh();await profiles(role,standalone);toast('配置已保存，新任务使用更新后的配置');}
+      await api('/api/agent-profiles/'+encodeURIComponent(role),'POST',body);$('profile-key').value='';await refresh();await profiles(role,standalone,roleLocked);toast('配置已保存，新任务使用更新后的配置');}
       catch(error){$('profile-error').textContent=error.message;$('profile-error').hidden=false;}
       finally{button.disabled=false;}
     });

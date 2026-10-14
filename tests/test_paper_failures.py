@@ -40,7 +40,7 @@ class PaperFailureTests(unittest.TestCase):
 
     def test_terminal_failure_stops_after_one_model_round(self):
         harness = self.harness([PaperError("HTTP 202，请上传 PDF")], 2)
-        with patch.dict("subagents.BUSINESS_HARNESSES", {"paper_summary": lambda *_: harness}):
+        with patch("subagents.registry.owner", return_value=SimpleNamespace(id="paper_reading", operations={"paper_summary": lambda *_: harness})):
             with self.assertRaisesRegex(PaperError, "HTTP 202"):
                 run_business_subagent("paper_summary", {}, SimpleNamespace(settings=SimpleNamespace()))
         self.assertEqual(harness.shared.model.chat.call_count, 1)
@@ -48,7 +48,7 @@ class PaperFailureTests(unittest.TestCase):
 
     def test_followup_inspection_error_does_not_hide_production_error(self):
         harness = self.harness([PublicFetchError(502), ValueError("还没有成果")], 2)
-        with patch.dict("subagents.BUSINESS_HARNESSES", {"paper_summary": lambda *_: harness}):
+        with patch("subagents.registry.owner", return_value=SimpleNamespace(id="paper_reading", operations={"paper_summary": lambda *_: harness})):
             with self.assertRaisesRegex(RuntimeError, "HTTP 502"):
                 run_business_subagent("paper_summary", {}, SimpleNamespace(settings=SimpleNamespace()))
 

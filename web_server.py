@@ -59,55 +59,11 @@ class APIError(Exception):
         self.status = status
 
 
-class SerialDaemonExecutor(Executor):
-    """One worker, with queued work cancelled when the local service closes."""
+from runtime_pool import ParallelDaemonExecutor
 
-    def __init__(self) -> None:
-        self._queue: queue.Queue = queue.Queue()
-        self._lock = threading.Lock()
-        self._closed = False
-        self._thread = threading.Thread(
-            target=self._work, name="agent-web-tasks", daemon=True
-        )
-        self._thread.start()
-
-    def submit(self, fn: Callable, *args: Any, **kwargs: Any) -> Future:
-        future: Future = Future()
-        with self._lock:
-            if self._closed:
-                raise RuntimeError("本地服务正在关闭。")
-            self._queue.put((future, fn, args, kwargs))
-        return future
-
-    def _work(self) -> None:
-        while True:
-            item = self._queue.get()
-            if item is None:
-                return
-            future, fn, args, kwargs = item
-            if not future.set_running_or_notify_cancel():
-                continue
-            try:
-                result = fn(*args, **kwargs)
-            except BaseException as exc:
-                future.set_exception(exc)
-            else:
-                future.set_result(result)
-
-    def shutdown(self, wait: bool = True, *, cancel_futures: bool = False) -> None:
-        with self._lock:
-            self._closed = True
-            if cancel_futures:
-                while True:
-                    try:
-                        item = self._queue.get_nowait()
-                    except queue.Empty:
-                        break
-                    if item is not None:
-                        item[0].cancel()
-            self._queue.put(None)
-        if wait:
-            self._thread.join()
+class SerialDaemonExecutor(ParallelDaemonExecutor):
+    """Compatibility for callers explicitly asking for the old serial queue."""
+    def __init__(self):super().__init__(1)
 
 
 class SecretSafeLogger:
@@ -180,7 +136,7 @@ class UITaskStore:
                 db.execute("ALTER TABLE ui_tasks ADD COLUMN capability TEXT NOT NULL DEFAULT 'video_summary'")
             if "parameters" not in columns:
                 db.execute("ALTER TABLE ui_tasks ADD COLUMN parameters TEXT")
-            for name, sql in (("conversation_id", "TEXT"), ("session_id", "TEXT"), ("attempt", "INTEGER NOT NULL DEFAULT 1"), ("schedule_job_id", "TEXT"), ("scheduled_at", "REAL")):
+            for name, sql in (("conversation_id", "TEXT"), ("session_id", "TEXT"), ("attempt", "INTEGER NOT NULL DEFAULT 1"), ("schedule_job_id", "TEXT"), ("scheduled_at", "REAL"), ("agent_id", "TEXT"), ("group_id", "TEXT")):
                 if name not in columns:
                     db.execute("ALTER TABLE ui_tasks ADD COLUMN " + name + " " + sql)
             for row in db.execute("SELECT id,url,include_frames FROM ui_tasks WHERE parameters IS NULL"):
@@ -244,7 +200,7 @@ class UITaskStore:
 
     def update(self, task_id: str, **values: Any) -> None:
         fields = {
-            "title", "status", "stage", "finished_at", "error", "output_file", "conversation_id", "session_id", "attempt", "schedule_job_id", "scheduled_at", "parameters", "model",
+            "title", "status", "stage", "finished_at", "error", "output_file", "conversation_id", "session_id", "attempt", "schedule_job_id", "scheduled_at", "agent_id", "group_id", "parameters", "model",
             "sections", "frames", "markdown",
         }
         if not values or not set(values).issubset(fields):
@@ -254,6 +210,11 @@ class UITaskStore:
         )
         with self._connect() as db:
             db.execute(sql, list(values.values()) + [task_id])
+
+    def resume(self,task_id,parameters):
+        with self._connect() as db:
+            changed=db.execute("UPDATE ui_tasks SET parameters=?,status='queued',stage='已导入 PDF，等待继续总结',error=NULL,finished_at=NULL,attempt=attempt+1 WHERE id=? AND status IN ('waiting_user','failed','interrupted')",(json.dumps(parameters,ensure_ascii=False),task_id)).rowcount
+        if not changed:raise APIError(409,'任务状态已变化，不能重复继续。')
 
     def interrupt_pending(self) -> None:
         with self._connect() as db:
@@ -276,13 +237,15 @@ class WebRuntime:
         self.store = JobStore(settings.database_path)
         self.tasks = UITaskStore(settings.database_path)
         migrate_legacy(settings)
-        self.executor = SerialDaemonExecutor()
+        self.executor = ParallelDaemonExecutor(settings.max_parallel_tasks)
         self.stop_event = threading.Event()
         self.task_tokens = {}
         self.task_tokens_lock = threading.Lock()
         self.scheduler = None
         self.chat = ChatService(settings.database_path, self.snapshot, self.create_capability_task, self.logger, task_provider=self.tasks.list, cancel_task=self.cancel_task, cancel_scheduled_run=self.cancel_scheduled_run)
         self.chat.task_lookup=self.tasks.get
+        self.chat.create_delegations=self.create_delegations
+        self.chat.knowledge.executor=self.executor
         for task in self.tasks.list():self.chat.deliver_task(self.tasks.get(task["id"],with_markdown=True))
         self.lease = SchedulerLease(settings.data_home / "scheduler.lock")
         self.scheduler_owned = self.lease.acquire()
@@ -307,7 +270,8 @@ class WebRuntime:
         return {
             "app_name": "本地 Agent",
             "version": "0.6.0",
-            "interaction": "conversation_and_pages",
+            "interaction": "agent_console",
+            "parallel": self.executor.status(),
             "api_key_configured": bool(settings.api_key),
             "provider": "deepseek",
             "model": settings.model,
@@ -397,7 +361,11 @@ class WebRuntime:
             parameters = validate_parameters(capability, parameters)
         except ValueError as exc:
             raise APIError(400, str(exc)) from exc
-        settings = resolve_agent(self.snapshot(), capability)
+        from agent_registry import registry as agents
+        if body.get('group_id') and not re.fullmatch(r'[a-f0-9]{32}',str(body['group_id'])):raise APIError(400,'委派批次编号无效。')
+        owner=agents.owner(capability)
+        if body.get("agent_id") and agents.get(body["agent_id"]).id!=owner.id:raise APIError(400,"这项能力不属于指定 Subagent。")
+        settings = resolve_agent(self.snapshot(), owner.id)
         if not settings.api_key:
             raise APIError(400, "请先在对话中配置该 Agent 的 API Key。")
         if capability == "video_summary" and not resolve_tool("yt-dlp"):
@@ -411,7 +379,7 @@ class WebRuntime:
             str(parameters.get("url", "")), bool(parameters.get("include_frames", False)),
             settings.model, capability=capability, parameters=parameters, title=title,
         )
-        self.tasks.update(task["id"], conversation_id=conversation_id)
+        self.tasks.update(task["id"], conversation_id=conversation_id, agent_id=owner.id,group_id=body.get("group_id"))
         task = self.tasks.get(task["id"])
         with self.task_tokens_lock:
             self.task_tokens[task["id"]] = CancellationToken()
@@ -427,6 +395,32 @@ class WebRuntime:
             raise APIError(503, str(exc)) from exc
         return task
 
+    def create_delegations(self, body):
+        from agent_registry import registry as agents
+        jobs=body.get("tasks")
+        if not isinstance(jobs,list) or not 1<=len(jobs)<=8:raise APIError(400,"一次委派需要 1 至 8 个任务。")
+        normalized=[]
+        for item in jobs:
+            if not isinstance(item,dict) or set(item)-{'agent_id','capability','parameters'}:raise APIError(400,"委派字段无效。")
+            agent=agents.get(item.get("agent_id"))
+            capability=item.get("capability")
+            if not agent.delegatable or capability not in agent.operations:raise APIError(400,"Subagent 不拥有该任务能力。")
+            parameters=validate_parameters(capability,item.get("parameters"))
+            if not resolve_agent(self.snapshot(),agent.id).api_key:raise APIError(400,"请先配置 "+agent.title+" 的凭证。")
+            if capability=='video_summary' and not resolve_tool('yt-dlp'):raise APIError(400,"尚未安装 yt-dlp。")
+            if capability=='paper_summary' and parameters.get('upload_id'):PaperUploads(self.snapshot().data_home).get(parameters['upload_id'])
+            normalized.append({'agent_id':agent.id,'capability':capability,'parameters':parameters})
+        conversation_id=body.get('conversation_id') or self.chat.current()['conversation_id']
+        self.chat._rows(conversation_id)
+        group_id=uuid.uuid4().hex
+        tasks=[]
+        try:
+            for item in normalized:tasks.append(self.create_capability_task({**item,'group_id':group_id,'conversation_id':conversation_id}))
+        except Exception:
+            for task in tasks:self.cancel_task(task['id'])
+            raise
+        return {'group_id':group_id,'tasks':tasks,'parallel_limit':self.executor.max_workers}
+
     def resume_task(self, task_id, upload_id):
         PaperUploads(self.snapshot().data_home).get(upload_id)
         with self.task_tokens_lock:
@@ -437,8 +431,7 @@ class WebRuntime:
             parameters = {"upload_id": upload_id}
             if original: parameters["source_url"] = safe_source(original)
             if task["parameters"].get("title"): parameters["title"] = task["parameters"]["title"]
-            with self.tasks._connect() as db:
-                db.execute("UPDATE ui_tasks SET parameters=?,status='queued',stage='已导入 PDF，等待继续总结',error=NULL,finished_at=NULL,attempt=attempt+1 WHERE id=? AND status IN ('waiting_user','failed','interrupted')",(json.dumps(parameters,ensure_ascii=False),task_id))
+            self.tasks.resume(task_id,parameters)
             self.task_tokens[task_id] = CancellationToken()
             try:
                 self.executor.submit(self._run_capability, task_id, self.snapshot())
@@ -493,7 +486,8 @@ class WebRuntime:
                 self.tasks.update(task_id, stage=stage)
 
         try:
-            settings = resolve_agent(self.snapshot(), capability)
+            from agent_registry import registry as agents
+            settings = resolve_agent(self.snapshot(), agents.owner(capability).id)
             safe_logger = SecretSafeLogger(self.logger, settings._profile_secrets + (settings.api_key,))
             self.tasks.update(task_id, model=settings.model, status="running", stage="开始执行" + task["title"])
             if capability == "paper_summary" and task["parameters"].get("url") and adapter_for(task["parameters"]["url"])["id"] == "ieee":
@@ -551,13 +545,14 @@ class WebRuntime:
 
     def _schedule_loop(self) -> None:
         def runner(capability: str, parameters: Dict[str, Any], cancellation=None, progress=None) -> Dict[str, Any]:
-            settings = resolve_agent(self.snapshot(), capability)
+            from agent_registry import registry as agents
+            settings = resolve_agent(self.snapshot(), agents.owner(capability).id)
             safe_logger = SecretSafeLogger(self.logger, settings._profile_secrets + (settings.api_key,))
             job_id=getattr(progress,"job_id",None);scheduled_at=getattr(progress,"scheduled_at",None)
             with self.chat._connect() as db:
                 origin=db.execute("SELECT conversation_id FROM schedule_conversations WHERE job_id=?",(job_id,)).fetchone()
             task=self.tasks.create(parameters.get("url",""),bool(parameters.get("include_frames")),settings.model,capability,parameters,get_capability(capability).title)
-            self.tasks.update(task["id"],status="running",stage="正在执行定时任务",conversation_id=origin[0] if origin else None,schedule_job_id=job_id,scheduled_at=scheduled_at)
+            self.tasks.update(task["id"],agent_id=settings._profile_role,status="running",stage="正在执行定时任务",conversation_id=origin[0] if origin else None,schedule_job_id=job_id,scheduled_at=scheduled_at)
             task=self.tasks.get(task["id"])
             def report(stage):
                 if progress: progress(stage)
@@ -584,7 +579,7 @@ class WebRuntime:
             finally:
                 self.chat.deliver_task(self.tasks.get(task["id"],with_markdown=True))
 
-        scheduler = Scheduler(self.store, self.settings, runner, self.logger, controlled_runner=runner)
+        scheduler = Scheduler(self.store, self.settings, runner, self.logger, controlled_runner=runner,executor=self.executor)
         self.scheduler = scheduler
         scheduler.recover_pending()
         try:
@@ -841,6 +836,9 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
     def _get(self, path: str, query: Optional[Dict[str, List[str]]] = None) -> None:
         if path == "/api/status":
             self._json(200, self.runtime.status())
+        elif path == "/api/subagents":
+            from agent_registry import registry as agents
+            self._json(200,{"agents":[agent.metadata() for agent in agents.all()],"parallel":self.runtime.executor.status()})
         elif path == "/api/agent-profiles":
             self._json(200, AgentProfiles(self.runtime.snapshot()).list())
         elif path.startswith("/api/skills/"):
@@ -980,7 +978,7 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
                 message = body.get("message") or "总结这篇论文并提取关键知识。"
                 if not isinstance(message, str):
                     raise APIError(400, "请输入有效的消息。")
-                body["message"] = message + "\n\n[用户上传的论文附件：" + json.dumps({"filename": metadata["filename"], "upload_id": attachments[0]}, ensure_ascii=False) + "]\n可使用 run_paper_summary 读取此附件。"
+                body["message"] = message + "\n\n[用户上传的论文附件：" + json.dumps({"filename": metadata["filename"], "upload_id": attachments[0]}, ensure_ascii=False) + "]\n可通过 delegate_subagents 委派 paper_reading 的 paper_summary 能力读取此附件。"
             self._json(202, self.runtime.chat.start(body.get("message"), body.get("conversation_id"), body.get("retry", False), body.get("web_enabled", True)))
         elif path.startswith("/api/chat/runs/") and path.endswith("/stop"):
             self._json(200, self.runtime.chat.stop(path[len("/api/chat/runs/"):-len("/stop")]))
@@ -1010,6 +1008,8 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
             self._json(200, self.runtime.artifacts().restore(body.get("trash_ids")))
         elif path == "/api/summarize":
             self._json(202, {"task": self.runtime.create_summary(body)})
+        elif path == "/api/subagents/delegate":
+            self._json(202,self.runtime.create_delegations(body))
         elif path == "/api/tasks":
             self._json(202, {"task": self.runtime.create_capability_task(body)})
         elif path.startswith("/api/tasks/") and path.endswith("/cancel"):

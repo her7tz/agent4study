@@ -145,6 +145,7 @@ class Scheduler:
         runner: Callable[[str, Dict[str, Any]], Dict[str, Any]],
         logger: Any,
         controlled_runner: Optional[Callable] = None,
+        executor=None,
     ):
         self.store = store
         self.settings = settings
@@ -160,10 +161,10 @@ class Scheduler:
         if retired:notify_local("联网研究计划已停用","联网研究现在通过 Agent 对话使用；历史报告仍保留。",logger)
         self.tokens = {}
         self.tokens_lock = threading.Lock()
-        self.pending = queue.Queue()
-        self.stopping = threading.Event()
-        self.worker = threading.Thread(target=self._work, name="scheduled-capabilities", daemon=True)
-        self.worker.start()
+        from runtime_pool import ParallelDaemonExecutor
+        self.stopping=threading.Event()
+        self.executor=executor or ParallelDaemonExecutor(getattr(settings,"max_parallel_tasks",4))
+        self.owns_executor=executor is None
 
     def recover_pending(self) -> None:
         with self.store._connect() as db:
@@ -173,7 +174,10 @@ class Scheduler:
         self.store.record_run(job["id"], scheduled_at, "queued", "已到计划时间，等待后台执行。")
         with self.tokens_lock:
             self.tokens[(job["id"], scheduled_at)] = CancellationToken()
-        self.pending.put((job, scheduled_at))
+        try:self.executor.submit(self._execute,job,scheduled_at)
+        except RuntimeError:
+            with self.tokens_lock:self.tokens.pop((job["id"],scheduled_at),None)
+            self.store.record_run(job["id"],scheduled_at,"interrupted","服务正在关闭，未执行本次任务。")
 
     def cancel_run(self, run_id):
         with self.store._connect() as db:
@@ -190,35 +194,18 @@ class Scheduler:
         self.store.record_run(row["job_id"], row["scheduled_at"], "cancelled", "用户取消本次执行；后续计划保持原安排。")
         return {"run_id": run_id, "status": "cancelled"}
 
-    def _work(self) -> None:
-        while not self.stopping.is_set():
-            try:
-                item = self.pending.get(timeout=0.5)
-            except queue.Empty:
-                continue
-            if self.stopping.is_set():
-                self.pending.task_done()
-                break
-            try:
-                self._execute(*item)
-            except Exception as exc:
-                self.logger.error("调度工作线程处理失败：%s", exc)
-            finally:
-                self.pending.task_done()
-
-    def close(self) -> None:
+    def close(self):
         self.stopping.set()
-        with self.tokens_lock:
-            tokens = list(self.tokens.values())
-        for token in tokens:
+        with self.tokens_lock:tokens=list(self.tokens.items())
+        for (job_id,scheduled_at),token in tokens:
             token.cancel()
-        while True:
-            try:
-                job, scheduled_at = self.pending.get_nowait()
-            except queue.Empty:
-                break
-            self.store.record_run(job["id"], scheduled_at, "interrupted", "服务退出时任务仍在队列中，请重新安排。")
-            self.pending.task_done()
+            with self.store._connect() as db:
+                row=db.execute("SELECT status FROM job_runs WHERE job_id=? AND scheduled_at=?",(job_id,scheduled_at)).fetchone()
+            if row and row['status'] in {'queued','running'}:self.store.record_run(job_id,scheduled_at,'interrupted','服务退出时任务未完成。')
+        if self.owns_executor:self.executor.shutdown(wait=False,cancel_futures=True)
+
+    def join(self,timeout=None):
+        if self.owns_executor:self.executor.join(timeout)
 
     def _execute(self, job: Dict[str, Any], scheduled_at: float) -> None:
         started = time.time()
