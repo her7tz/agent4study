@@ -42,7 +42,7 @@ class PaperFailureTests(unittest.TestCase):
         harness = self.harness([PaperError("HTTP 202，请上传 PDF")], 2)
         with patch.dict("subagents.BUSINESS_HARNESSES", {"paper_summary": lambda *_: harness}):
             with self.assertRaisesRegex(PaperError, "HTTP 202"):
-                run_business_subagent("paper_summary", {}, None)
+                run_business_subagent("paper_summary", {}, SimpleNamespace(settings=SimpleNamespace()))
         self.assertEqual(harness.shared.model.chat.call_count, 1)
         self.assertEqual(harness.shared.execute_tool.call_count, 1)
 
@@ -50,7 +50,7 @@ class PaperFailureTests(unittest.TestCase):
         harness = self.harness([PublicFetchError(502), ValueError("还没有成果")], 2)
         with patch.dict("subagents.BUSINESS_HARNESSES", {"paper_summary": lambda *_: harness}):
             with self.assertRaisesRegex(RuntimeError, "HTTP 502"):
-                run_business_subagent("paper_summary", {}, None)
+                run_business_subagent("paper_summary", {}, SimpleNamespace(settings=SimpleNamespace()))
 
 
 if __name__ == "__main__":
