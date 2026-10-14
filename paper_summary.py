@@ -12,7 +12,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 from harness import load_skill_instructions
 from runtime_control import CancellationToken, RunCancelled
 from storage_layout import atomic_text
-from web_research import _PageText, fetch_public, public_url
+from web_research import _PageText, fetch_public, public_url, PublicFetchError
 
 MAX_PDF_BYTES = 20 * 1024 * 1024
 MAX_TEXT = 300000
@@ -21,6 +21,17 @@ MAX_PAGES = 200
 
 class PaperError(ValueError):
     status = 400
+    retryable = False
+
+
+def _fetch_paper(url, token):
+    try:
+        return fetch_public(url, token, timeout=30, binary=True, max_bytes=MAX_PDF_BYTES)
+    except PublicFetchError as exc:
+        if exc.retryable:
+            raise
+        detail = "返回 HTTP 202，当前游客读取器未取得论文文字，页面可能要求访问验证或异步加载" if exc.http_status == 202 else str(exc)
+        raise PaperError("论文链接" + detail + "。请上传可读取的论文 PDF、粘贴原文，或提供无需验证的公开全文链接。") from exc
 
 
 class PaperUploads:
@@ -151,13 +162,13 @@ def read_paper(parameters, settings, token, progress):
     progress("获取公开论文材料…")
     fallback = None
     try:
-        final, data, mime = fetch_public(target, token, timeout=30, binary=True, max_bytes=MAX_PDF_BYTES)
+        final, data, mime = _fetch_paper(target, token)
     except RunCancelled:
         raise
     except Exception:
         if target == original:
             raise
-        final, data, mime = fetch_public(original, token, timeout=30, binary=True, max_bytes=MAX_PDF_BYTES)
+        final, data, mime = _fetch_paper(original, token)
         fallback = "论文全文链接暂不可访问，仅读取链接页面可见材料。"
     if data[:1024].lstrip().startswith(b"%PDF-"):
         return {**_pdf(data, token, progress), "url": final, "original_url": original}
@@ -174,11 +185,16 @@ def read_paper(parameters, settings, token, progress):
     if "html" in mime:
         parser = _PaperPage()
         parser.feed(text)
+        visible = "".join(parser.parts).strip()
+        if len(visible) < 2000 and any(phrase in visible.casefold() for phrase in (
+                "we need to verify that you're not a robot", "verify you are human",
+                "enable javascript and cookies to continue", "checking your browser before accessing")):
+            raise PaperError("论文页面是访问验证页面，未取得论文内容。请上传 PDF、粘贴原文或提供公开全文链接。")
         title = parser.citations.get("citation_title") or "".join(parser.title).strip() or title
         pdf_url = parser.citations.get("citation_pdf_url")
         if pdf_url:
             try:
-                pdf_final, pdf_data, _ = fetch_public(urljoin(final, pdf_url), token, timeout=30, binary=True, max_bytes=MAX_PDF_BYTES)
+                pdf_final, pdf_data, _ = _fetch_paper(urljoin(final, pdf_url), token)
                 if not pdf_data[:1024].lstrip().startswith(b"%PDF-"):
                     raise PaperError("全文链接没有返回 PDF。")
                 return {**_pdf(pdf_data, token, progress), "url": pdf_final, "original_url": original, "title": title[:200]}

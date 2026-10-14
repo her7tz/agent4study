@@ -221,3 +221,7 @@ summaries/
 既有知识归档会补存整份文档，无需重新调用模型。已有根目录笔记会按功能迁移，图片与导出副本一起移动，旧链接和内容 ID 保留兼容。原始 PDF 保存在 `.local/uploads/papers/`，以便重试和定时执行；移除聊天中的附件选择不会删除已上传的本机原件。`.local/` 和 `summaries/` 均不推送到 GitHub。
 
 扩展一个新功能时，注册 `Capability` 和业务 Harness 即可复用对话工具、后台队列、定时调度、进度、取消、日志和保存目录。论文的读取与材料范围检查属于 `PaperHarness`，共用的模型、轨迹与文件操作属于 `SharedHarness`。
+
+论文网站可能返回登录、访问验证或动态加载页面。例如 IEEE Xplore 链接 `document/11029963` 在游客读取测试中返回 HTTP 202 和需要 JavaScript 的人机验证页面，未取得正文。此时任务失败并提示上传 PDF、粘贴原文或换用公开全文链接。输入无法读取时不反复调用模型，不将验证页面总结为论文；失败原因保留在运行记录与日志中。
+
+离线回归检查可运行 `.venv/bin/python -m unittest discover -s tests -v`，不调用模型 API。

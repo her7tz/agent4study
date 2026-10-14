@@ -1,6 +1,7 @@
 """Offline regressions for shared scheduling and video fallback behavior."""
 
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -18,10 +19,13 @@ class SchedulingTests(unittest.TestCase):
         self.store = JobStore(self.root / "tasks.sqlite3")
         self.settings = Settings()
         self.settings.data_home = self.root
+        self.settings.output_dir = self.root / "summaries"
         self.runner = Mock(return_value={"title": "结果", "path": "summary.md"})
         self.scheduler = Scheduler(self.store, self.settings, self.runner, Mock())
 
     def tearDown(self):
+        self.scheduler.close()
+        self.scheduler.worker.join(timeout=2)
         self.folder.cleanup()
 
     def test_only_one_scheduler_can_hold_the_shared_lease(self):
@@ -47,9 +51,12 @@ class SchedulingTests(unittest.TestCase):
 
     @patch("scheduler.notify_local")
     def test_one_time_job_runs_only_once(self, notify):
+        completed = threading.Event()
+        notify.side_effect = lambda *args: completed.set()
         self.store.add("due", "https://youtu.be/example", "once", None, 100)
         self.scheduler.tick(now=105)
         self.scheduler.tick(now=110)
+        self.assertTrue(completed.wait(timeout=3), "后台任务应在超时前完成")
         self.runner.assert_called_once()
         self.assertEqual(self.store.recent_runs()[0]["status"], "completed")
 

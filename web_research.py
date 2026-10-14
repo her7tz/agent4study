@@ -22,6 +22,13 @@ from runtime_control import CancellationToken, RunCancelled
 MAX_RESPONSE = 3 * 1024 * 1024
 
 
+class PublicFetchError(RuntimeError):
+    def __init__(self, status):
+        self.http_status = status
+        self.retryable = status not in {202, 401, 403, 404, 410, 451}
+        super().__init__("网页返回 HTTP {}，未取得可读取正文，可能需要登录或限制自动访问。".format(status))
+
+
 def public_url(value):
     if not isinstance(value, str) or len(value) > 4096 or any(ord(c) < 33 for c in value):
         raise ValueError("请输入有效的公开网页链接。")
@@ -84,7 +91,7 @@ def fetch_public(url, cancellation=None, timeout=18, binary=False, max_bytes=MAX
                 url = urllib.parse.urljoin(url, location)
                 continue
             if response.status != 200:
-                raise RuntimeError("网页返回 HTTP {}，可能需要登录或限制自动访问。".format(response.status))
+                raise PublicFetchError(response.status)
             mime = (response.getheader("Content-Type") or "text/html").lower()
             if not binary and not any(kind in mime for kind in ("text/", "xml", "json")):
                 raise ValueError("当前只读取网页文字，不支持此文件类型。")

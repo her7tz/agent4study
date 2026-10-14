@@ -13,6 +13,7 @@ def run_business_subagent(capability_id, parameters, context):
     messages = [{"role": "system", "content": harness.instructions()},
                 {"role": "user", "content": json.dumps({"goal": harness.title, "parameters": harness.task_description()}, ensure_ascii=False)}]
     deadline = time.monotonic() + harness.time_budget
+    production_error = None
     try:
         for index in range(harness.max_rounds):
             shared.cancellation.check()
@@ -46,11 +47,16 @@ def run_business_subagent(capability_id, parameters, context):
                     detail = str(exc).replace(shared.settings.api_key, "[已隐藏凭证]") if shared.settings.api_key else str(exc)
                     result = {"success": False, "error": detail[:1200]}
                     shared.trace("tool_failed", name=function.get("name", ""), error=detail[:1200])
+                    if function.get("name") == "produce_result":
+                        production_error = detail[:1200]
+                    # Invalid/unavailable input cannot be repaired by repeating the same tool.
+                    if not getattr(exc, "retryable", True):
+                        raise
                 messages.append({"role": "tool", "tool_call_id": call["id"], "content": json.dumps(result, ensure_ascii=False)})
             if harness.finished:
                 break
         if not harness.finished:
-            raise RuntimeError(harness.title + "未通过完成检查，请查看运行记录后重试。")
+            raise RuntimeError(harness.title + "未通过完成检查。" + ("处理原因：" + production_error if production_error else "请查看运行记录后重试。"))
         result = dict(harness.result)
         result["subagent"] = {"role": capability_id, "run_id": shared.run_id, "verified": True}
         return result
