@@ -8,6 +8,7 @@
   const activeStatuses = new Set(['queued', 'running']);
   const statusNames = { queued: '等待处理', running: '处理中', completed: '已完成', failed: '执行失败', interrupted: '已中断', cancelled: '已取消', missed: '已跳过', deleted: '已移入回收站' };
   Object.assign(state, {conversations: [], chatRunId: null, watchGeneration: 0, chatSources: [], conversationEdit: null});
+  Object.assign(state, {conversationScope:'active', conversationArchived:false, knowledgeJobs:[], knowledgePollTimer:null, knowledgeEntry:null});
   const dateFormat = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
   const fullDateFormat = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
 
@@ -118,14 +119,18 @@
     $('summarize-button').querySelector('span').textContent = state.submitting ? '正在提交…' : '生成视频笔记';
     $('schedule-submit').disabled = !state.connected || !state.capabilities.length;
     $('settings-submit').disabled = !state.connected;
-    $('chat-submit').disabled = !state.connected || !state.status?.api_key_configured || state.chatBusy;
+    $('chat-submit').disabled = !state.connected || !state.status?.api_key_configured || state.chatBusy || state.conversationArchived;
+    $('chat-input').disabled = state.conversationArchived;
     $('chat-submit').querySelector('span').textContent = state.chatBusy ? '正在处理…' : '发送';
     $('chat-new').disabled = !state.connected;
     $('chat-busy').hidden = !state.chatBusy;
     $('chat-stop').hidden = !state.chatBusy;
-    $('chat-retry').disabled = state.chatBusy || !state.messages.some(message => message.role === 'user');
+    $('chat-retry').disabled = state.chatBusy || state.conversationArchived || !state.messages.some(message => message.role === 'user');
     $('conversation-delete').disabled = state.chatBusy || !state.conversationId;
     $('conversation-rename').disabled = !state.conversationId;
+    $('conversation-archive').disabled = state.chatBusy || !state.conversationId;
+    $('conversation-archive').hidden = state.conversationArchived;
+    $('conversation-unarchive').hidden = !state.conversationArchived;
   }
 
   function capabilityInfo(id) {
@@ -316,11 +321,56 @@
   }
 
   function renderConversations() {
-    $('conversation-list').innerHTML = state.conversations.length ? state.conversations.map(item => `<button type="button" class="conversation-item${item.id === state.conversationId ? ' is-current' : ''}" data-conversation="${escapeHTML(item.id)}" aria-pressed="${item.id === state.conversationId}"><strong>${escapeHTML(item.title || '新对话')}</strong><small>${escapeHTML(formatTime(item.updated_at))}</small></button>`).join('') : '<p class="field-help">新对话会保存在这里。</p>';
+    const items = state.conversations.filter(item => Boolean(item.archived_at) === (state.conversationScope === 'archived'));
+    document.querySelectorAll('[data-conversation-scope]').forEach(button => { const selected=button.dataset.conversationScope===state.conversationScope;button.classList.toggle('is-current',selected);button.setAttribute('aria-pressed',String(selected)); });
+    $('conversation-list').innerHTML = items.length ? items.map(item => `<button type="button" class="conversation-item${item.id === state.conversationId ? ' is-current' : ''}" data-conversation="${escapeHTML(item.id)}" aria-pressed="${item.id === state.conversationId}"><strong>${escapeHTML(item.title || '新对话')}</strong><small>${escapeHTML(item.knowledge_job && item.archived_at ? item.knowledge_job.stage : formatTime(item.updated_at))}</small></button>`).join('') : `<p class="field-help">${state.conversationScope === 'archived' ? '归档的对话会保留在这里。' : '新对话会保存在这里。'}</p>`;
   }
 
   async function refreshConversations() {
-    const data = await api('/api/conversations'); state.conversations = data.conversations || []; renderConversations();
+    const data = await api('/api/conversations?scope=all'); state.conversations = data.conversations || []; renderConversations();
+  }
+
+  function renderArchiveStatus(data) {
+    const job = data.knowledge_job;
+    const status = $('conversation-archive-status');
+    status.hidden = !data.archived_at && !job;
+    if (status.hidden) return;
+    const heading = data.archived_at ? '这段对话已归档。恢复后可以继续交流。' : '这段对话已恢复。';
+    status.innerHTML = `<p>${escapeHTML(heading)}</p>${job ? `<p>${escapeHTML(job.stage)}${job.error ? '：'+escapeHTML(job.error) : ''}</p>${['failed','interrupted'].includes(job.status) ? `<button type="button" class="text-button" data-knowledge-retry="${escapeHTML(job.id)}">重试知识提取</button>` : ''}${job.status === 'completed' ? '<button type="button" class="text-button" data-go="knowledge">查看个人知识库</button>' : ''}` : '<small>本次仅归档，未提取知识。</small>'}`;
+  }
+
+  function ensureKnowledgePolling() {
+    if (!state.knowledgeJobs.some(job=>activeStatuses.has(job.status)) || state.knowledgePollTimer) return;
+    state.knowledgePollTimer = setTimeout(async()=>{
+      state.knowledgePollTimer=null;
+      await Promise.allSettled([refreshKnowledge(), refreshConversations(), state.chatBusy ? Promise.resolve() : refreshConversation()]);
+      ensureKnowledgePolling();
+    },2500);
+  }
+
+  async function refreshKnowledge() {
+    const [data,trash,jobs]=await Promise.all([api('/api/knowledge?query='+encodeURIComponent($('knowledge-query').value.trim())),api('/api/knowledge/trash'),api('/api/knowledge/ingestions')]);
+    $('knowledge-database').textContent='保存位置：'+data.database;
+    $('knowledge-count').textContent=data.entries.length===data.total?`${data.total} 条`:`显示 ${data.entries.length} 条 · 共 ${data.total} 条`;
+    $('knowledge-list').innerHTML=data.entries.length ? data.entries.map(entry=>`<button type="button" class="card knowledge-card" data-knowledge-open="${escapeHTML(entry.id)}"><h3>${escapeHTML(entry.title)}</h3><div class="knowledge-tags">${entry.tags.map(tag=>`<span>${escapeHTML(tag)}</span>`).join('')}</div><p>${escapeHTML(entry.excerpt)}</p><small>${escapeHTML(formatTime(entry.updated_at,true))} · 查看知识与来源</small></button>`).join('') : emptyState('知识从一次归档开始','归档对话时选择“整理知识并入库”，知识点就会出现在这里。','file');
+    $('knowledge-trash-list').innerHTML=trash.entries.map(entry=>`<div class="library-row"><strong>${escapeHTML(entry.title)}</strong><button class="text-button" type="button" data-knowledge-restore="${escapeHTML(entry.id)}">恢复</button></div>`).join('') || '<p class="field-help">知识回收站为空。</p>';
+    state.knowledgeJobs=jobs.jobs||[];
+    const visible=state.knowledgeJobs.filter(job=>['queued','running','failed','interrupted'].includes(job.status)).slice(0,8);
+    $('knowledge-jobs').innerHTML=visible.map(job=>`<div class="notice ${job.status==='failed'?'notice-warning':'notice-subtle'}"><div><strong>${escapeHTML(job.stage)}</strong>${job.error?`<p>${escapeHTML(job.error)}</p>`:''}<button class="text-button" type="button" data-conversation="${escapeHTML(job.conversation_id)}">查看来源会话</button>${['failed','interrupted'].includes(job.status)?`<button class="text-button" type="button" data-knowledge-retry="${escapeHTML(job.id)}">重试提取</button>`:''}</div></div>`).join('');
+    ensureKnowledgePolling();
+  }
+
+  async function openKnowledge(id) {
+    const {entry}=await api('/api/knowledge/'+encodeURIComponent(id)); state.knowledgeEntry=entry;
+    $('knowledge-detail-title').textContent=entry.title;
+    $('knowledge-preview').replaceChildren(chatMarkdown(entry.content));
+    $('knowledge-sources').innerHTML='<h3>来源与依据</h3>'+entry.sources.map(source=>`<section class="knowledge-source"><button class="text-button" type="button" data-conversation="${escapeHTML(source.conversation_id)}">${escapeHTML(source.title)} · 打开来源对话</button><small>提取于 ${escapeHTML(formatTime(source.created_at,true))}</small>${source.evidence.map(message=>`<details><summary>${message.role==='user'?'你的消息':'对话回答'} · 来源摘录</summary><p>${escapeHTML(message.content)}</p></details>`).join('')}${source.urls.map(url=>{try{const parsed=new URL(url);return ['https:','http:'].includes(parsed.protocol)?`<a class="source-link" href="${escapeHTML(parsed.href)}" target="_blank" rel="noopener noreferrer">${escapeHTML(parsed.hostname)} · 对话引用</a>`:'';}catch{return '';}}).join('')}</section>`).join('')+(entry.revision>1?'<p class="field-help">此条知识已由你编辑，原始来源保留供查阅。</p>':'');
+    $('knowledge-related').innerHTML=entry.related.length ? '<h3>相关知识</h3>'+entry.related.map(item=>`<button type="button" class="text-button" data-knowledge-open="${escapeHTML(item.id)}">${escapeHTML(item.title)}</button>`).join('')+'<p class="field-help">相近内容保留为独立条目，可比较条件与观点。</p>' : '';
+    $('knowledge-edit-form').hidden=true; $('knowledge-detail-actions').hidden=false;
+    $('knowledge-edit').hidden=Boolean(entry.deleted_at);
+    $('knowledge-delete').textContent=entry.deleted_at?'恢复知识':'移入回收站';
+    inlineError('knowledge-detail-error');
+    if (!$('knowledge-dialog').open) $('knowledge-dialog').showModal();
   }
 
   async function watchRun(runId, initialText='') {
@@ -418,12 +468,14 @@
             } catch {}
             continue;
           }
-          if (!['task', 'schedule', 'note', 'deleted'].includes(action.type)) continue;
+          if (!['task', 'schedule', 'note', 'deleted', 'knowledge'].includes(action.type)) continue;
           const button = document.createElement('button');
           button.type = 'button';
           button.className = 'button button-secondary button-small';
           const title = action.title || capabilityInfo(action.capability)?.title || '任务';
-          if (action.type === 'task' && action.task_id) {
+          if (action.type === 'knowledge' && action.entry_id) {
+            button.dataset.knowledgeOpen=action.entry_id;button.textContent=`${title} · 参考知识`;
+          } else if (action.type === 'task' && action.task_id) {
             button.dataset.openTask = action.task_id;
             const task = state.tasks.find((item) => item.id === action.task_id);
             button.textContent = `${title} · ${task ? statusNames[task.status] || task.status : '查看进度'}`;
@@ -452,11 +504,15 @@
   }
   function applyConversation(data) {
     state.watchGeneration += 1;
+    const changed=state.conversationId!==data.conversation_id || state.conversationArchived!==Boolean(data.archived_at);
     state.conversationId = data.conversation_id || null;
+    state.conversationArchived=Boolean(data.archived_at);
+    if(changed)state.conversationScope=state.conversationArchived?'archived':'active';
     state.messages = Array.isArray(data.messages) ? data.messages : [];
     state.chatBusy = Boolean(data.active_run);
     state.chatRunId = data.active_run?.id || null;
     $('conversation-title').textContent = data.title || '新对话';
+    renderArchiveStatus(data);
     renderChat();
     renderConversations();
     updateSubmitState();
@@ -929,9 +985,9 @@
   }
 
   async function setView(view, reload = true) {
-    if (!['chat', 'video', 'schedules', 'history', 'settings'].includes(view)) view = 'chat';
+    if (!['chat', 'knowledge', 'video', 'schedules', 'history', 'settings'].includes(view)) view = 'chat';
     state.view = view;
-    const labels = { chat: '与 Agent 对话', video: '视频总结', schedules: '定时任务', history: '运行记录', settings: '模型设置' };
+    const labels = { chat: '与 Agent 对话', knowledge:'个人知识库', video: '视频总结', schedules: '定时任务', history: '运行记录', settings: '模型设置' };
     document.querySelectorAll('.view').forEach((element) => { element.hidden = element.id !== `view-${view}`; });
     document.querySelectorAll('.nav-item').forEach((element) => {
       const selected = element.dataset.view === view;
@@ -951,6 +1007,7 @@
         renderStatus();
         if (view === 'schedules' || view === 'history') await refreshSchedules();
         if (view === 'chat') await Promise.all([refreshConversation(), refreshLibrary()]);
+        if (view === 'knowledge') await refreshKnowledge();
         if (view === 'history' || view === 'video') {
           const [tasks, reports] = await Promise.all([api('/api/tasks'), api('/api/reports')]);
           state.tasks = tasks.tasks || [];
@@ -1081,7 +1138,15 @@
       const artifactDelete = event.target.closest('[data-artifact-delete]');
       const artifactRestore = event.target.closest('[data-artifact-restore]');
       const conversation = event.target.closest('[data-conversation]');
-      if (conversation) { applyConversation(await api(`/api/conversations/${encodeURIComponent(conversation.dataset.conversation)}/select`, 'POST', {})); inlineError('chat-error'); return; }
+      if (conversation) { applyConversation(await api(`/api/conversations/${encodeURIComponent(conversation.dataset.conversation)}/select`, 'POST', {})); if($('knowledge-dialog').open)$('knowledge-dialog').close();await setView('chat',false);inlineError('chat-error');return; }
+      const scope=event.target.closest('[data-conversation-scope]');
+      if(scope){state.conversationScope=scope.dataset.conversationScope;renderConversations();return;}
+      const knowledgeOpen=event.target.closest('[data-knowledge-open]');
+      if(knowledgeOpen){await openKnowledge(knowledgeOpen.dataset.knowledgeOpen);return;}
+      const knowledgeRestore=event.target.closest('[data-knowledge-restore]');
+      if(knowledgeRestore){await api('/api/knowledge/'+encodeURIComponent(knowledgeRestore.dataset.knowledgeRestore)+'/restore','POST',{});await refreshKnowledge();toast('知识已恢复');return;}
+      const knowledgeRetry=event.target.closest('[data-knowledge-retry]');
+      if(knowledgeRetry){await api('/api/knowledge-ingestions/'+encodeURIComponent(knowledgeRetry.dataset.knowledgeRetry)+'/retry','POST',{});await Promise.all([refreshKnowledge(),refreshConversations(),refreshConversation()]);toast('已安排重新提取');return;}
       const cancelTask = event.target.closest('[data-cancel-task]');
       if (cancelTask) { await api(`/api/tasks/${encodeURIComponent(cancelTask.dataset.cancelTask)}/cancel`, 'POST', {}); await refreshAll(); toast('任务已取消'); return; }
       const cancelRun = event.target.closest('[data-cancel-run]');
@@ -1147,6 +1212,51 @@
     catch (error) { inlineError('chat-error', error.message); }
   });
   $('chat-retry').addEventListener('click', () => submitChat(null, true));
+  $('conversation-archive').addEventListener('click',()=>{
+    state.archiveTarget=state.conversationId;
+    $('archive-form').querySelector('input[value="only"]').checked=true;
+    inlineError('archive-error');$('archive-dialog').showModal();
+  });
+  $('archive-cancel').addEventListener('click',()=>$('archive-dialog').close());
+  $('archive-form').addEventListener('submit',async event=>{
+    event.preventDefault();$('archive-submit').disabled=true;
+    try{
+      const extract=$('archive-form').querySelector('input[name="archive-mode"]:checked').value==='knowledge';
+      const result=await api('/api/conversations/'+encodeURIComponent(state.archiveTarget)+'/archive','POST',{extract_knowledge:extract});
+      applyConversation(result.conversation);await Promise.all([refreshConversations(),refreshKnowledge()]);
+      $('archive-dialog').close();toast(result.extraction_error?'对话已归档，知识提取暂未启动：'+result.extraction_error:extract?'已归档，知识正在后台整理':'已归档，完整对话已保留',Boolean(result.extraction_error));
+    }catch(error){inlineError('archive-error',error.message);}
+    finally{$('archive-submit').disabled=false;}
+  });
+  $('conversation-unarchive').addEventListener('click',async()=>{
+    try{applyConversation(await api('/api/conversations/'+encodeURIComponent(state.conversationId)+'/unarchive','POST',{}));await refreshConversations();toast('对话已恢复，可以继续交流');}
+    catch(error){toast(error.message,true);}
+  });
+  $('knowledge-refresh').addEventListener('click',()=>refreshKnowledge().catch(error=>toast(error.message,true)));
+  $('knowledge-search-form').addEventListener('submit',event=>{event.preventDefault();refreshKnowledge().catch(error=>toast(error.message,true));});
+  $('knowledge-close').addEventListener('click',()=>$('knowledge-dialog').close());
+  $('knowledge-edit').addEventListener('click',()=>{
+    const entry=state.knowledgeEntry;
+    $('knowledge-title-input').value=entry.title;$('knowledge-tags-input').value=entry.tags.join(', ');$('knowledge-content-input').value=entry.content;
+    $('knowledge-edit-form').hidden=false;$('knowledge-detail-actions').hidden=true;$('knowledge-title-input').focus();
+  });
+  $('knowledge-edit-cancel').addEventListener('click',()=>{$('knowledge-edit-form').hidden=true;$('knowledge-detail-actions').hidden=false;});
+  $('knowledge-edit-form').addEventListener('submit',async event=>{
+    event.preventDefault();const entry=state.knowledgeEntry;const button=event.submitter; if(button)button.disabled=true;
+    try{
+      const tags=[...new Set($('knowledge-tags-input').value.split(/[,，]/).map(tag=>tag.trim()).filter(Boolean))];
+      await api('/api/knowledge/'+encodeURIComponent(entry.id)+'/update','POST',{title:$('knowledge-title-input').value,content:$('knowledge-content-input').value,tags,revision:entry.revision});
+      await Promise.all([openKnowledge(entry.id),refreshKnowledge()]);toast('知识已更新，来源记录已保留');
+    }catch(error){inlineError('knowledge-detail-error',error.message);}
+    finally{if(button)button.disabled=false;}
+  });
+  $('knowledge-delete').addEventListener('click',async()=>{
+    const entry=state.knowledgeEntry;
+    try{
+      await api('/api/knowledge/'+encodeURIComponent(entry.id)+(entry.deleted_at?'/restore':''),entry.deleted_at?'POST':'DELETE',{});
+      $('knowledge-dialog').close();await refreshKnowledge();toast(entry.deleted_at?'知识已恢复':'已移入知识回收站，可恢复');
+    }catch(error){inlineError('knowledge-detail-error',error.message);}
+  });
   for (const action of ['rename','delete']) $('conversation-' + action).addEventListener('click', () => {
     state.conversationEdit = {action, id:state.conversationId};
     $('conversation-dialog-title').textContent = action === 'rename' ? '重命名对话' : '删除这段对话？';
@@ -1170,10 +1280,11 @@
   $('result-download').addEventListener('click', downloadOfflineNote);
   $('reconnect-button').addEventListener('click', () => refreshAll());
   window.addEventListener('hashchange', () => setView(location.hash.slice(1)));
-  window.addEventListener('pagehide', () => { clearTimeout(state.pollTimer); state.pollTimer = null; });
+  window.addEventListener('pagehide', () => { clearTimeout(state.pollTimer); state.pollTimer = null; clearTimeout(state.knowledgePollTimer);state.knowledgePollTimer=null; });
   window.addEventListener('pageshow', ensurePolling);
+  window.addEventListener('pageshow', ensureKnowledgePolling);
   updateScheduleTime();
   updateSubmitState();
   setView(location.hash.slice(1) || 'chat', false);
-  refreshAll().then(() => Promise.all([refreshLibrary(),refreshConversations()])).catch(error => toast(error.message, true));
+  refreshAll().then(() => Promise.all([refreshLibrary(),refreshConversations(),refreshKnowledge()])).catch(error => toast(error.message, true));
 })();

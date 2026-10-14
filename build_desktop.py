@@ -54,7 +54,7 @@ def main():
     info = {
         "CFBundleIdentifier": "local.agent.workbench", "CFBundleName": "Agent 工作台",
         "CFBundleDisplayName": "Agent 工作台", "CFBundleExecutable": "AgentDesktop",
-        "CFBundlePackageType": "APPL", "CFBundleVersion": "3", "CFBundleShortVersionString": "0.3.0",
+        "CFBundlePackageType": "APPL", "CFBundleVersion": "4", "CFBundleShortVersionString": "0.4.0",
         "CFBundleIconFile": "AppIcon", "LSMinimumSystemVersion": "13.0",
         "NSHighResolutionCapable": True,
         "NSAppTransportSecurity": {"NSAllowsLocalNetworking": True},

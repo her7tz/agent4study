@@ -47,6 +47,7 @@
       <div class="nav-label">能力与任务</div>
       <nav class="nav-list">
         <button class="nav-item is-active" data-view="chat" aria-current="page"><svg class="icon"><use href="#i-spark"/></svg><span>与 Agent 对话</span></button>
+        <button class="nav-item" data-view="knowledge"><svg class="icon"><use href="#i-file"/></svg><span>个人知识库</span></button>
         <button class="nav-item" data-view="video"><svg class="icon"><use href="#i-video"/></svg><span>视频总结</span><span id="active-task-count" class="nav-count" hidden></span></button>
         <button class="nav-item" data-view="schedules"><svg class="icon"><use href="#i-clock"/></svg><span>定时任务</span></button>
         <button class="nav-item" data-view="history"><svg class="icon"><use href="#i-history"/></svg><span>运行记录</span></button>
@@ -68,9 +69,10 @@
 
         <section id="view-chat" class="view">
           <div class="page-heading"><div><span class="eyebrow">YOUR AGENT</span><h1 tabindex="-1">说出想做的事<span class="heading-dot">。</span></h1><p>聊知识、联网研究、执行功能，都从这里开始。</p></div><button id="chat-new" class="button button-secondary" type="button">新对话</button></div>
-          <div class="conversation-layout"><aside class="card conversation-sidebar" aria-label="历史会话"><div class="section-topline"><h2>我的对话</h2></div><div id="conversation-list"></div></aside><div class="conversation-main">
+          <div class="conversation-layout"><aside class="card conversation-sidebar" aria-label="历史会话"><div class="section-topline"><h2>我的对话</h2></div><div class="conversation-filters"><button type="button" data-conversation-scope="active" class="is-current" aria-pressed="true">当前</button><button type="button" data-conversation-scope="archived" aria-pressed="false">归档</button></div><div id="conversation-list"></div></aside><div class="conversation-main">
           <section class="card chat-card" aria-label="Agent 对话">
-            <div class="conversation-toolbar"><strong id="conversation-title">新对话</strong><div><button id="conversation-rename" class="text-button" type="button">重命名</button><button id="conversation-delete" class="text-button" type="button">删除对话</button></div></div>
+            <div class="conversation-toolbar"><strong id="conversation-title">新对话</strong><div><button id="conversation-archive" class="text-button" type="button">归档</button><button id="conversation-unarchive" class="text-button" type="button" hidden>恢复对话</button><button id="conversation-rename" class="text-button" type="button">重命名</button><button id="conversation-delete" class="text-button" type="button">删除对话</button></div></div>
+            <div id="conversation-archive-status" class="archive-status" role="status" hidden></div>
             <div id="chat-messages" class="chat-messages" role="log" aria-label="对话记录" aria-live="polite" aria-relevant="additions"></div>
             <div id="chat-busy" class="chat-busy" role="status" hidden><span class="spinner" aria-hidden="true"></span><span id="chat-stage">正在理解问题…</span></div>
             <form id="chat-form" class="chat-form">
@@ -83,6 +85,14 @@
           </section>
           </div></div>
           <section class="card library-card"><div class="section-topline"><h2>内容库</h2><button id="library-refresh" class="text-button" type="button">刷新内容</button></div><p class="field-help">生成的文本和原图自动保存在本机，无需点击下载。</p><p id="library-directory" class="field-help"></p><div id="library-list"></div><details><summary>回收站</summary><div id="library-trash"></div></details></section>
+        </section>
+
+        <section id="view-knowledge" class="view" hidden>
+          <div class="page-heading"><div><span class="eyebrow">YOUR KNOWLEDGE</span><h1 tabindex="-1">把聊过的，变成自己的知识<span class="heading-dot">。</span></h1><p>从你选择归档的对话中整理，保留概念、方法与来源。</p></div><button id="knowledge-refresh" class="button button-secondary" type="button">刷新知识</button></div>
+          <section class="card knowledge-search-card"><form id="knowledge-search-form"><label class="field-label" for="knowledge-query">查找知识点</label><div class="knowledge-search-row"><input id="knowledge-query" class="text-input" type="search" maxlength="500" placeholder="搜索概念、主题或关键词…"><button class="button button-primary" type="submit">搜索</button></div></form><p class="field-help">普通聊天保存在会话历史。归档时选择“整理知识并入库”才会写入这里。</p><p id="knowledge-database" class="field-help"></p></section>
+          <div id="knowledge-jobs" class="knowledge-jobs" aria-live="polite"></div>
+          <div class="section-topline"><h2>知识点 <span id="knowledge-count" class="count-label"></span></h2></div><div id="knowledge-list" class="knowledge-grid"></div>
+          <details class="card knowledge-trash"><summary>知识回收站</summary><div id="knowledge-trash-list"></div></details>
         </section>
 
         <section id="view-video" class="view" hidden>
@@ -155,6 +165,8 @@
   <dialog id="run-detail-dialog" class="detail-dialog" aria-labelledby="run-detail-title"><div class="detail-dialog-heading"><h2 id="run-detail-title">运行情况</h2><button class="icon-button" data-close-detail aria-label="关闭运行情况"><svg class="icon"><use href="#i-close"/></svg></button></div><p id="run-detail-content"></p><button class="button button-secondary" data-close-detail>知道了</button></dialog>
   <dialog id="result-dialog" class="result-dialog" aria-label="生成内容预览"><div class="result-dialog-toolbar"><strong>生成内容</strong><button class="icon-button" data-close-result aria-label="关闭内容预览"><svg class="icon"><use href="#i-close"/></svg></button></div><div id="result-dialog-slot"></div></dialog>
   <dialog id="conversation-dialog" class="detail-dialog" aria-labelledby="conversation-dialog-title"><form id="conversation-edit-form"><h2 id="conversation-dialog-title">重命名对话</h2><p id="conversation-dialog-help" class="field-help"></p><input id="conversation-name" class="text-input" type="text" maxlength="100" aria-label="对话名称"><div class="dialog-actions"><button id="conversation-edit-cancel" class="button button-secondary" type="button">取消</button><button class="button button-primary" type="submit">确定</button></div><p id="conversation-edit-error" class="inline-error" role="alert" hidden></p></form></dialog>
+  <dialog id="archive-dialog" class="detail-dialog" aria-labelledby="archive-dialog-title"><form id="archive-form"><h2 id="archive-dialog-title">归档这段对话</h2><p class="field-help">完整记录会保留，之后可以查看和恢复。</p><label class="archive-choice"><input type="radio" name="archive-mode" value="only" checked><span><strong>仅归档</strong><small>移入归档列表，不提取知识。</small></span></label><label class="archive-choice"><input type="radio" name="archive-mode" value="knowledge"><span><strong>整理知识并入库</strong><small>归档后提取知识点，保留来源并融入个人数据库。</small></span></label><p class="field-help">知识整理在后台完成，失败不会影响归档。</p><p id="archive-error" class="inline-error" role="alert" hidden></p><div class="dialog-actions"><button id="archive-cancel" class="button button-secondary" type="button">取消</button><button id="archive-submit" class="button button-primary" type="submit">归档对话</button></div></form></dialog>
+  <dialog id="knowledge-dialog" class="result-dialog" aria-labelledby="knowledge-detail-title"><div class="result-dialog-toolbar"><strong id="knowledge-detail-title">知识点</strong><button id="knowledge-close" class="icon-button" type="button" aria-label="关闭知识点"><svg class="icon"><use href="#i-close"/></svg></button></div><div class="knowledge-detail"><div id="knowledge-preview" class="markdown-content"></div><div id="knowledge-sources"></div><div id="knowledge-related"></div><form id="knowledge-edit-form" hidden><label class="field-label" for="knowledge-title-input">标题</label><input id="knowledge-title-input" class="text-input" maxlength="200" required><label class="field-label" for="knowledge-tags-input">主题标签（逗号分隔）</label><input id="knowledge-tags-input" class="text-input" maxlength="500"><label class="field-label" for="knowledge-content-input">知识内容</label><textarea id="knowledge-content-input" class="text-input" rows="12" maxlength="12000" required></textarea><div class="dialog-actions"><button id="knowledge-edit-cancel" class="button button-secondary" type="button">取消编辑</button><button class="button button-primary" type="submit">保存修改</button></div></form><p id="knowledge-detail-error" class="inline-error" role="alert" hidden></p><div id="knowledge-detail-actions" class="dialog-actions"><button id="knowledge-edit" class="button button-secondary" type="button">编辑知识</button><button id="knowledge-delete" class="text-button" type="button">移入回收站</button></div></div></dialog>
   <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
 </body>
 </html>

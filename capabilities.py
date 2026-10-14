@@ -181,29 +181,8 @@ def _validate_video(parameters: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _execute_video(parameters: Dict[str, Any], context: CapabilityContext) -> Dict[str, Any]:
-    from video_summary import summarize_video, _CANCELLATION
-    client = context.client or DeepSeekClient(context.settings)
-    token = context.cancellation
-    if token:
-        class BoundClient:
-            def chat(self, *args, **kwargs):
-                token.check()
-                return client.chat(*args, **dict(kwargs, cancellation=token))
-
-            def json_chat(self, *args, **kwargs):
-                token.check()
-                return client.json_chat(*args, **dict(kwargs, cancellation=token))
-        bound = BoundClient()
-    else:
-        bound = client
-    marker = _CANCELLATION.set(token)
-    try:
-        return summarize_video(
-            parameters["url"], bound, context.settings,
-            include_frames=parameters["include_frames"], output_path=context.output_path,
-            logger=context.logger, progress=context.progress)
-    finally:
-        _CANCELLATION.reset(marker)
+    from subagents import run_business_subagent
+    return run_business_subagent("video_summary", parameters, context)
 
 
 registry = CapabilityRegistry()
@@ -228,8 +207,8 @@ registry.register(
 
 
 def _execute_research(parameters, context):
-    from web_research import research_report
-    return research_report(parameters, context)
+    from subagents import run_business_subagent
+    return run_business_subagent("web_research", parameters, context)
 
 
 registry.register(Capability(

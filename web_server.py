@@ -30,6 +30,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from capabilities import execute_capability, get_capability, list_capabilities, validate_parameters
 from conversation import ChatService, ConversationError
 from artifacts import ArtifactStore, ArtifactError
+from knowledge import KnowledgeError
 from runtime_control import CancellationToken, RunCancelled
 from harness import DeepSeekClient, JobStore, Settings, asr_runtime_status, notify_local, resolve_tool
 from report_exports import ExportError, build_report_archive
@@ -745,7 +746,15 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/conversations/current":
             self._json(200, self.runtime.chat.current())
         elif path == "/api/conversations":
-            self._json(200, {"conversations": self.runtime.chat.list()})
+            self._json(200, {"conversations": self.runtime.chat.list((query or {}).get("scope", ["active"])[0])})
+        elif path == "/api/knowledge":
+            self._json(200, {"entries": self.runtime.chat.knowledge.store.search((query or {}).get("query", [""])[0], limit=100), "total": self.runtime.chat.knowledge.store.count(), "database": str(self.runtime.chat.knowledge.store.path)})
+        elif path == "/api/knowledge/trash":
+            self._json(200, {"entries": self.runtime.chat.knowledge.store.search(deleted=True)})
+        elif path == "/api/knowledge/ingestions":
+            self._json(200, {"jobs": self.runtime.chat.knowledge.jobs()})
+        elif path.startswith("/api/knowledge/"):
+            self._json(200, {"entry": self.runtime.chat.knowledge.store.get(path[len("/api/knowledge/"):])})
         elif path.startswith("/api/conversations/"):
             self._json(200, self.runtime.chat._payload(path[len("/api/conversations/"):]))
         elif path.startswith("/api/chat/runs/"):
@@ -790,6 +799,18 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
             self._json(200, self.runtime.chat.select(path[len("/api/conversations/"):-len("/select")]))
         elif path.startswith("/api/conversations/") and path.endswith("/rename"):
             self._json(200, self.runtime.chat.rename(path[len("/api/conversations/"):-len("/rename")], body.get("title")))
+        elif path.startswith("/api/conversations/") and path.endswith("/archive"):
+            if not set(body).issubset({"extract_knowledge"}):
+                raise APIError(400, "归档请求包含未知字段。")
+            self._json(200, self.runtime.chat.archive(path[len("/api/conversations/"):-len("/archive")], body.get("extract_knowledge", False)))
+        elif path.startswith("/api/conversations/") and path.endswith("/unarchive"):
+            self._json(200, self.runtime.chat.unarchive(path[len("/api/conversations/"):-len("/unarchive")]))
+        elif path.startswith("/api/knowledge-ingestions/") and path.endswith("/retry"):
+            self._json(202, {"job": self.runtime.chat.knowledge.retry(path[len("/api/knowledge-ingestions/"):-len("/retry")])})
+        elif path.startswith("/api/knowledge/") and path.endswith("/update"):
+            self._json(200, {"entry": self.runtime.chat.knowledge.store.update(path[len("/api/knowledge/"):-len("/update")], body.get("title"), body.get("content"), body.get("tags"), body.get("revision"))})
+        elif path.startswith("/api/knowledge/") and path.endswith("/restore"):
+            self._json(200, {"entry": self.runtime.chat.knowledge.store.restore(path[len("/api/knowledge/"):-len("/restore")])})
         elif path == "/api/conversations/new":
             if body:
                 raise APIError(400, "新对话请求不需要输入参数。")
@@ -823,6 +844,9 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
             elif self.command == "DELETE":
                 # DELETE also carries JSON to keep all mutating requests uniform.
                 self._json_body()
+                if path.startswith("/api/knowledge/"):
+                    self._json(200, self.runtime.chat.knowledge.store.delete(path[len("/api/knowledge/"):]))
+                    return
                 if path.startswith("/api/conversations/"):
                     self._json(200, self.runtime.chat.delete(path[len("/api/conversations/"):]))
                     return
@@ -837,6 +861,8 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
         except ConversationError as exc:
             self._json(exc.status, {"error": str(exc)})
         except ArtifactError as exc:
+            self._json(exc.status, {"error": str(exc)})
+        except KnowledgeError as exc:
             self._json(exc.status, {"error": str(exc)})
         except (BrokenPipeError, ConnectionResetError):
             return
