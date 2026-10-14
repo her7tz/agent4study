@@ -158,7 +158,8 @@ class Settings:
 
     def prepare(self) -> None:
         self.data_home.mkdir(parents=True, exist_ok=True)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        from storage_layout import prepare_library
+        prepare_library(self.output_dir)
 
 
 def configure_logging(settings: Settings) -> logging.Logger:
@@ -236,6 +237,8 @@ class DeepSeekClient:
         except urllib.error.URLError as exc:
             raise RuntimeError(f"无法连接 DeepSeek API：{exc.reason}") from exc
         try:
+            if payload["choices"][0].get("finish_reason") == "length":
+                raise RuntimeError("模型输出超过长度限制，内容未完整生成，请缩小材料或重试。")
             return payload["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as exc:
             raise RuntimeError("DeepSeek API 返回了无法识别的响应。") from exc

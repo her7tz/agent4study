@@ -12,6 +12,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List
 from urllib.parse import quote
+from storage_layout import feature_directory, FOLDERS, artifact_alias
 
 
 class ArtifactError(Exception):
@@ -24,6 +25,7 @@ class ArtifactStore:
     _lock = threading.RLock()
 
     def __init__(self, output_dir: Path, database_path: Path, data_home: Path):
+        self.data_home = data_home
         self.root = output_dir.resolve()
         self.database = database_path
         self.trash = data_home.resolve() / "trash" / "notes"
@@ -52,7 +54,9 @@ class ArtifactStore:
         stat = path.stat()
         return {"id": hashlib.sha256(relative.encode()).hexdigest()[:16], "title": title,
                 "name": relative, "url": "/outputs/" + quote(relative, safe="/"),
-                "modified_at": stat.st_mtime, "size": stat.st_size}
+                "modified_at": stat.st_mtime, "size": stat.st_size,
+                "category": path.relative_to(self.root).parts[0] if len(path.relative_to(self.root).parts) > 1 else "legacy",
+                "folder": FOLDERS.get(path.relative_to(self.root).parts[0], path.relative_to(self.root).parts[0] if len(path.relative_to(self.root).parts) > 1 else "早期文档") }
 
     def save(self, title, markdown):
         if not isinstance(title, str) or not title.strip() or len(title) > 200:
@@ -60,10 +64,11 @@ class ArtifactStore:
         if not isinstance(markdown, str) or not markdown.strip() or len(markdown) > 80000:
             raise ArtifactError(400, "笔记正文必须为 1 到 80000 字。")
         with self._lock:
-            path = self.root / ("note_" + time.strftime("%Y%m%d-%H%M%S") + "_" + uuid.uuid4().hex[:8] + ".md")
+            directory = feature_directory(self.root, "notes")
+            path = directory / ("note_" + time.strftime("%Y%m%d-%H%M%S") + "_" + uuid.uuid4().hex[:8] + ".md")
             pending = None
             try:
-                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=str(self.root), prefix=".note-", delete=False) as stream:
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=str(directory), prefix=".note-", delete=False) as stream:
                     pending = Path(stream.name)
                     stream.write("# " + title.strip().replace("\n", " ") + "\n\n" + markdown.strip() + "\n")
                     stream.flush()
@@ -74,7 +79,7 @@ class ArtifactStore:
                     pending.unlink(missing_ok=True)
             return self._metadata(path)
 
-    def list(self, query: str = "", limit: int = 50) -> List[Dict[str, Any]]:
+    def list(self, query: str = "", limit: int = 50, category: str = "") -> List[Dict[str, Any]]:
         with self._lock:
             candidates = {}
             priority = {".md": 0, ".txt": 1, ".html": 2}
@@ -95,7 +100,7 @@ class ArtifactStore:
             for path in candidates.values():
                 try:
                     item = self._metadata(path)
-                    if query.casefold() in (item["title"] + " " + item["name"]).casefold():
+                    if (not category or item["category"] == category) and query.casefold() in (item["title"] + " " + item["name"] + " " + item["folder"]).casefold():
                         results.append(item)
                 except OSError:
                     continue
@@ -103,6 +108,7 @@ class ArtifactStore:
             return ordered if limit == 0 else ordered[:max(1, min(limit, 200))]
 
     def _find(self, artifact_id: str) -> Dict[str, Any]:
+        artifact_id = artifact_alias(artifact_id, self.data_home)
         item = next((item for item in self.list(limit=0) if item["id"] == artifact_id), None)
         if item is None:
             raise ArtifactError(404, "没有找到这份内容，请重新查询内容库。")

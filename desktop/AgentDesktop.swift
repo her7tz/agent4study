@@ -1,5 +1,6 @@
 import Cocoa
 import WebKit
+import UniformTypeIdentifiers
 import Darwin
 
 // The app owns only processes it launches. An already running workspace service
@@ -502,6 +503,22 @@ private final class AgentDesktop: NSObject, NSApplicationDelegate, NSWindowDeleg
         if isWorkspaceURL(url) { webView.load(navigationAction.request) }
         else { openExternal(url) }
         return nil
+    }
+
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
+        guard let url = frame.request.url, isWorkspaceURL(url), let window = webView.window else {
+            completionHandler(nil); return
+        }
+        let panel = NSOpenPanel()
+        panel.title = "选择论文 PDF"
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.pdf]
+        panel.beginSheetModal(for: window) { response in
+            completionHandler(response == .OK ? panel.urls : nil)
+        }
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {

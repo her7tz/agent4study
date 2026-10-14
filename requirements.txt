@@ -3,3 +3,4 @@ faster-whisper>=1.1,<2
 av>=11,<19
 yt-dlp[default]>=2025.11.12
 imageio-ffmpeg>=0.6,<1
+pypdf>=6,<7

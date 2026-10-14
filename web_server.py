@@ -6,6 +6,7 @@ remain local configuration and are never included in an API response.
 """
 
 import copy
+import importlib.util
 import json
 import logging
 import mimetypes
@@ -31,6 +32,8 @@ from capabilities import execute_capability, get_capability, list_capabilities, 
 from conversation import ChatService, ConversationError
 from artifacts import ArtifactStore, ArtifactError
 from knowledge import KnowledgeError
+from paper_summary import PaperError, PaperUploads, MAX_PDF_BYTES
+from storage_layout import FOLDERS, migrate_legacy, resolve_output_alias
 from runtime_control import CancellationToken, RunCancelled
 from harness import DeepSeekClient, JobStore, Settings, asr_runtime_status, notify_local, resolve_tool
 from report_exports import ExportError, build_report_archive
@@ -264,6 +267,7 @@ class WebRuntime:
         self.token = secrets.token_urlsafe(32)
         self.store = JobStore(settings.database_path)
         self.tasks = UITaskStore(settings.database_path)
+        migrate_legacy(settings)
         self.executor = SerialDaemonExecutor()
         self.stop_event = threading.Event()
         self.task_tokens = {}
@@ -298,6 +302,7 @@ class WebRuntime:
             "base_url": settings.base_url,
             "models": MODEL_NAMES,
             "dependencies": {
+                "paper_pdf": bool(importlib.util.find_spec("pypdf")),
                 "yt_dlp": bool(resolve_tool("yt-dlp")),
                 "ffmpeg": bool(resolve_tool("ffmpeg")),
                 "asr": asr["ready"],
@@ -307,6 +312,7 @@ class WebRuntime:
             "scheduler_running": not self.stop_event.is_set(),
             "scheduler_owner": "web" if self.scheduler_owned else "external",
             "output_dir": str(settings.output_dir.resolve()),
+            "folders": [{"id": key, "title": title, "path": str(settings.output_dir.resolve() / key)} for key, title in FOLDERS.items()],
             "automatic_save": True,
             "timezone": "Asia/Shanghai",
             "csrf_token": self.token,
@@ -384,6 +390,8 @@ class WebRuntime:
             raise APIError(400, "请先在设置中保存 DeepSeek API Key。")
         if capability == "video_summary" and not resolve_tool("yt-dlp"):
             raise APIError(400, "尚未安装视频读取工具 yt-dlp，请按使用说明安装。")
+        if capability == "paper_summary" and parameters.get("upload_id"):
+            PaperUploads(settings.data_home).get(parameters["upload_id"])
         title = metadata.title if hasattr(metadata, "title") else metadata.get("title", capability)
         task = self.tasks.create(
             str(parameters.get("url", "")), bool(parameters.get("include_frames", False)),
@@ -575,6 +583,7 @@ class WebRuntime:
                     )
                 reports.append({
                     "name": name, "title": heading,
+                    "category": name.split("/")[0] if "/" in name else "legacy",
                     "modified_at": stat.st_mtime, "size": stat.st_size,
                     "url": "/outputs/" + urllib.parse.quote(name, safe="/"),
                 })
@@ -651,8 +660,9 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
             size = int(length_headers[0])
         except ValueError as exc:
             raise APIError(400, "请求长度无效。") from exc
-        if size < 0 or size > MAX_BODY_BYTES:
-            raise APIError(413, "请求过大，最多允许 64 KB。")
+        limit = 2 * 1024 * 1024 if urllib.parse.urlsplit(self.path).path in {"/api/tasks", "/api/schedules"} else MAX_BODY_BYTES
+        if size < 0 or size > limit:
+            raise APIError(413, "请求过大，最多允许 {} KB。".format(limit // 1024))
         try:
             value = json.loads(self.rfile.read(size).decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -718,7 +728,7 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
         if len(files) != 1 or not files[0]:
             raise APIError(400, "请选择需要下载的总结文件。")
         try:
-            with build_report_archive(self.runtime.snapshot().output_dir, files[0]) as archive:
+            with build_report_archive(self.runtime.snapshot().output_dir, resolve_output_alias(files[0], self.runtime.snapshot().data_home)) as archive:
                 disposition = "attachment; filename=\"video-summary.zip\"; filename*=UTF-8''" + urllib.parse.quote(
                     archive.filename, safe=""
                 )
@@ -738,7 +748,7 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/capabilities":
             self._json(200, {"capabilities": list_capabilities()})
         elif path == "/api/artifacts":
-            self._json(200, {"artifacts": self.runtime.artifacts().list((query or {}).get("query", [""])[0]), "directory": str(self.runtime.snapshot().output_dir.resolve())})
+            self._json(200, {"artifacts": self.runtime.artifacts().list((query or {}).get("query", [""])[0], category=(query or {}).get("category", [""])[0]), "directory": str(self.runtime.snapshot().output_dir.resolve())})
         elif path == "/api/artifacts/trash":
             self._json(200, {"artifacts": self.runtime.artifacts().list_trash()})
         elif path.startswith("/api/artifacts/"):
@@ -749,6 +759,8 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
             self._json(200, {"conversations": self.runtime.chat.list((query or {}).get("scope", ["active"])[0])})
         elif path == "/api/knowledge":
             self._json(200, {"entries": self.runtime.chat.knowledge.store.search((query or {}).get("query", [""])[0], limit=100), "total": self.runtime.chat.knowledge.store.count(), "database": str(self.runtime.chat.knowledge.store.path)})
+        elif path == "/api/knowledge/archives":
+            self._json(200, {"archives": self.runtime.chat.knowledge.archives()})
         elif path == "/api/knowledge/trash":
             self._json(200, {"entries": self.runtime.chat.knowledge.store.search(deleted=True)})
         elif path == "/api/knowledge/ingestions":
@@ -776,11 +788,28 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/schedules":
             self._json(200, self.runtime.schedules())
         elif path.startswith("/outputs/"):
-            self._file(self.runtime.snapshot().output_dir, path[len("/outputs/"):], output=True)
+            self._file(self.runtime.snapshot().output_dir, resolve_output_alias(path[len("/outputs/"):], self.runtime.snapshot().data_home), output=True)
         elif path.startswith("/api/"):
             raise APIError(404, "没有找到该接口。")
         else:
             self._file(WEB_DIR, "index.html" if path == "/" else path.lstrip("/"))
+
+    def _upload_paper(self):
+        if self.headers.get("Transfer-Encoding") or self.headers.get_content_type() != "application/pdf":
+            raise APIError(415, "请上传普通 PDF 文件。")
+        lengths = self.headers.get_all("Content-Length", [])
+        if len(lengths) != 1 or not lengths[0].isdigit():
+            raise APIError(400, "附件长度无效。")
+        size = int(lengths[0])
+        if not 0 < size <= MAX_PDF_BYTES:
+            raise APIError(413, "PDF 文件大小不能超过 20 MB。")
+        self.connection.settimeout(30)
+        data = self.rfile.read(size)
+        if len(data) != size:
+            raise APIError(400, "PDF 上传未完成，请重试。")
+        filename = urllib.parse.unquote(self.headers.get("X-File-Name", "论文.pdf"))
+        metadata = PaperUploads(self.runtime.snapshot().data_home).save(data, filename)
+        self._json(201, {"paper": metadata})
 
     def _post(self, path: str, body: Dict[str, Any]) -> None:
         if path == "/api/config":
@@ -790,8 +819,19 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
                 raise APIError(400, "对话请求包含不支持的字段。")
             self._json(200, self.runtime.chat.send(body.get("message"), body.get("conversation_id")))
         elif path == "/api/chat/start":
-            if not set(body).issubset({"message", "conversation_id", "retry", "web_enabled"}):
+            if not set(body).issubset({"message", "conversation_id", "retry", "web_enabled", "attachments"}):
                 raise APIError(400, "对话请求包含不支持的字段。")
+            attachments = body.get("attachments", [])
+            if not isinstance(attachments, list) or len(attachments) > 1 or any(not isinstance(item, str) for item in attachments):
+                raise APIError(400, "一次消息最多附加一份论文 PDF。")
+            if attachments:
+                if body.get("retry"):
+                    raise APIError(400, "重试时使用原来的论文附件。")
+                _, metadata = PaperUploads(self.runtime.snapshot().data_home).get(attachments[0])
+                message = body.get("message") or "总结这篇论文并提取关键知识。"
+                if not isinstance(message, str):
+                    raise APIError(400, "请输入有效的消息。")
+                body["message"] = message + "\n\n[用户上传的论文附件：" + json.dumps({"filename": metadata["filename"], "upload_id": attachments[0]}, ensure_ascii=False) + "]\n可使用 run_paper_summary 读取此附件。"
             self._json(202, self.runtime.chat.start(body.get("message"), body.get("conversation_id"), body.get("retry", False), body.get("web_enabled", True)))
         elif path.startswith("/api/chat/runs/") and path.endswith("/stop"):
             self._json(200, self.runtime.chat.stop(path[len("/api/chat/runs/"):-len("/stop")]))
@@ -840,7 +880,10 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
             if self.command in {"GET", "HEAD"}:
                 self._get(path, urllib.parse.parse_qs(request_url.query, keep_blank_values=True))
             elif self.command == "POST":
-                self._post(path, self._json_body())
+                if path == "/api/papers/upload":
+                    self._upload_paper()
+                else:
+                    self._post(path, self._json_body())
             elif self.command == "DELETE":
                 # DELETE also carries JSON to keep all mutating requests uniform.
                 self._json_body()
@@ -861,6 +904,8 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
         except ConversationError as exc:
             self._json(exc.status, {"error": str(exc)})
         except ArtifactError as exc:
+            self._json(exc.status, {"error": str(exc)})
+        except PaperError as exc:
             self._json(exc.status, {"error": str(exc)})
         except KnowledgeError as exc:
             self._json(exc.status, {"error": str(exc)})

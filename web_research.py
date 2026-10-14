@@ -55,7 +55,7 @@ class _PinnedConnection(http.client.HTTPSConnection):
             self.sock = self._context.wrap_socket(self.sock, server_hostname=self.host)
 
 
-def fetch_public(url, cancellation=None, timeout=18):
+def fetch_public(url, cancellation=None, timeout=18, binary=False, max_bytes=MAX_RESPONSE):
     token = cancellation or CancellationToken()
     for _ in range(5):
         token.check()
@@ -74,7 +74,7 @@ def fetch_public(url, cancellation=None, timeout=18):
         try:
             connection.request("GET", urllib.parse.urlunsplit(("", "", parsed.path or "/", parsed.query, "")),
                 headers={"User-Agent": "Mozilla/5.0 (compatible; LocalAgent/0.3)",
-                         "Accept": "text/html,application/xhtml+xml,application/xml,text/plain;q=0.8",
+                         "Accept": "application/pdf,text/html;q=0.9,*/*;q=0.5" if binary else "text/html,application/xhtml+xml,application/xml,text/plain;q=0.8",
                          "Accept-Encoding": "identity"})
             response = connection.getresponse()
             if response.status in {301, 302, 303, 307, 308}:
@@ -86,7 +86,7 @@ def fetch_public(url, cancellation=None, timeout=18):
             if response.status != 200:
                 raise RuntimeError("网页返回 HTTP {}，可能需要登录或限制自动访问。".format(response.status))
             mime = (response.getheader("Content-Type") or "text/html").lower()
-            if not any(kind in mime for kind in ("text/", "xml", "json")):
+            if not binary and not any(kind in mime for kind in ("text/", "xml", "json")):
                 raise ValueError("当前只读取网页文字，不支持此文件类型。")
             data = bytearray()
             while True:
@@ -95,14 +95,17 @@ def fetch_public(url, cancellation=None, timeout=18):
                 if not chunk:
                     break
                 data.extend(chunk)
-                if len(data) > MAX_RESPONSE:
+                if len(data) > max_bytes:
                     raise ValueError("网页过大，请换用正文页面。")
             if response.getheader("Content-Encoding", "").lower() == "gzip":
                 import io
                 with gzip.GzipFile(fileobj=io.BytesIO(data)) as compressed:
-                    data = compressed.read(MAX_RESPONSE + 1)
-                if len(data) > MAX_RESPONSE:
+                    data = compressed.read(max_bytes + 1)
+                if len(data) > max_bytes:
                     raise ValueError("解压后的网页过大。")
+            if binary:
+                token.check()
+                return url, bytes(data), mime
             match = re.search(r"charset\s*=\s*[\"']?([\w-]+)", mime)
             encoding = match.group(1) if match else "utf-8"
             try:

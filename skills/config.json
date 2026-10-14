@@ -1,8 +1,17 @@
 {
   "version": 1,
   "capabilities": {
-    "video_summary": ["video-summary"],
-    "web_research": ["web-research"],
-    "conversation_knowledge": ["knowledge-extraction"]
+    "video_summary": [
+      "video-summary"
+    ],
+    "web_research": [
+      "web-research"
+    ],
+    "conversation_knowledge": [
+      "knowledge-extraction"
+    ],
+    "paper_summary": [
+      "paper-summary"
+    ]
   }
 }

@@ -12,7 +12,7 @@ import re
 import tempfile
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -139,6 +139,10 @@ class CapabilityRegistry:
         normalized = capability.validate(parameters)
         if context.cancellation:
             context.cancellation.check()
+        from storage_layout import feature_directory
+        scoped_settings = copy.copy(context.settings)
+        scoped_settings.output_dir = feature_directory(context.settings.output_dir, capability_id)
+        context = replace(context, settings=scoped_settings)
         result = capability.executor(normalized, context)
         if context.cancellation:
             context.cancellation.check()
@@ -218,6 +222,28 @@ registry.register(Capability(
         "topic": {"type": "string", "title": "研究问题", "minLength": 1, "maxLength": 500},
         "max_sources": {"type": "integer", "title": "最多读取的来源数", "default": 5, "minimum": 2, "maximum": 8}},
         "required": ["topic"], "additionalProperties": False}, executor=_execute_research))
+
+
+
+def _execute_paper(parameters, context):
+    from subagents import run_business_subagent
+    return run_business_subagent("paper_summary", parameters, context)
+
+
+def _validate_paper(parameters):
+    from paper_summary import validate_paper
+    return validate_paper(parameters)
+
+
+registry.register(Capability(
+    id="paper_summary", title="论文总结",
+    description="根据论文原文、公开论文链接或已上传 PDF，整理概述、贡献、方法、实验依据、局限与关键知识，自动保存。三种来源只填一种。",
+    input_schema={"type": "object", "properties": {
+        "url": {"type": "string", "title": "论文链接", "format": "uri", "maxLength": 4096, "description": "公开 PDF 或论文页面；与原文、附件三选一"},
+        "paper_text": {"type": "string", "title": "论文原文", "maxLength": 300000, "format": "multiline", "description": "粘贴可读取的原文，至少200字；与链接、附件三选一"},
+        "upload_id": {"type": "string", "title": "PDF 附件", "format": "paper-upload", "maxLength": 32, "description": "已上传的本地 PDF；与链接、原文三选一"},
+        "title": {"type": "string", "title": "标题提示", "maxLength": 200}},
+        "additionalProperties": False}, executor=_execute_paper, validator=_validate_paper))
 
 
 def list_capabilities() -> List[Dict[str, Any]]:

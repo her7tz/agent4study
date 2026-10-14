@@ -14,6 +14,8 @@ from pathlib import Path
 
 from harness import DeepSeekClient, load_skill_instructions
 from runtime_control import CancellationToken, RunCancelled
+from storage_layout import feature_directory, atomic_text
+from urllib.parse import quote
 
 
 class KnowledgeError(Exception):
@@ -56,6 +58,10 @@ class KnowledgeStore:
                     PRIMARY KEY(entry_id,revision));
                 CREATE TABLE IF NOT EXISTS knowledge_batches(id TEXT PRIMARY KEY,result TEXT NOT NULL);
             """)
+        with self.connect() as db:
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(knowledge_documents)")}
+            if "points" not in columns:
+                db.execute("ALTER TABLE knowledge_documents ADD COLUMN points TEXT")
         try:
             self.path.chmod(0o600)
         except OSError:
@@ -165,7 +171,7 @@ class KnowledgeStore:
             previous = db.execute("SELECT result FROM knowledge_batches WHERE id=?", (batch_id,)).fetchone()
             if previous:
                 return json.loads(previous[0])
-            db.execute("INSERT INTO knowledge_documents VALUES(?,?,?,?,?)", (batch_id, snapshot["conversation_id"], snapshot["title"], json.dumps(snapshot["messages"], ensure_ascii=False), time.time()))
+            db.execute("INSERT INTO knowledge_documents(id,conversation_id,title,messages,created_at,points) VALUES(?,?,?,?,?,?)", (batch_id, snapshot["conversation_id"], snapshot["title"], json.dumps(snapshot["messages"], ensure_ascii=False), time.time(), json.dumps(points, ensure_ascii=False)))
             ids, added, linked = [], 0, 0
             for point in points:
                 fingerprint = hashlib.sha256((_key(point["title"]) + "\n" + point["content"].strip()).encode()).hexdigest()
@@ -185,6 +191,32 @@ class KnowledgeStore:
                     ids.append(entry_id)
             result = {"entry_ids": ids, "count": len(ids), "added": added, "linked": linked}
             db.execute("INSERT INTO knowledge_batches VALUES(?,?)", (batch_id, json.dumps(result)))
+        return result
+
+
+    def batch(self, batch_id):
+        with self.connect() as db:
+            row = db.execute("SELECT result FROM knowledge_batches WHERE id=?", (batch_id,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def document(self, batch_id):
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM knowledge_documents WHERE id=?", (batch_id,)).fetchone()
+            if row is None:
+                raise KnowledgeError(404, "没有找到知识归档。")
+            result = dict(row)
+            if row["points"] is not None:
+                result["points"] = json.loads(row["points"])
+            else:
+                # Backfill legacy archives once, using the original revision where available.
+                points = []
+                for entry in db.execute("SELECT e.*,s.message_ids,s.urls FROM knowledge_entries e JOIN knowledge_sources s ON s.entry_id=e.id WHERE s.document_id=? ORDER BY e.created_at", (batch_id,)).fetchall():
+                    original = db.execute("SELECT payload FROM knowledge_revisions WHERE entry_id=? ORDER BY revision LIMIT 1", (entry["id"],)).fetchone()
+                    value = json.loads(original[0]) if original else dict(entry)
+                    points.append({"title": value["title"], "content": value["content"], "tags": json.loads(value["tags"]), "message_ids": json.loads(entry["message_ids"]), "source_urls": json.loads(entry["urls"])})
+                result["points"] = points
+                db.execute("UPDATE knowledge_documents SET points=? WHERE id=?", (json.dumps(points, ensure_ascii=False), batch_id))
+            result.pop("messages", None)
         return result
 
 
@@ -223,6 +255,7 @@ class KnowledgeService:
                 snapshot TEXT NOT NULL,status TEXT NOT NULL,stage TEXT NOT NULL,created_at REAL NOT NULL,
                 finished_at REAL,error TEXT,result TEXT,UNIQUE(conversation_id,fingerprint))""")
             db.execute("UPDATE knowledge_ingestions SET status='interrupted',stage='服务重启，知识提取已中断',finished_at=? WHERE status IN ('queued','running')", (time.time(),))
+        self._backfill_documents()
         threading.Thread(target=self._worker, daemon=True, name="conversation-knowledge").start()
 
     def connect(self):
@@ -246,6 +279,52 @@ class KnowledgeService:
     def jobs(self):
         with self.connect() as db:
             return [self._job(row) for row in db.execute("SELECT * FROM knowledge_ingestions ORDER BY created_at DESC LIMIT 100")]
+
+    def _write_document(self, job_id, result):
+        document = self.store.document(job_id)
+        settings = self.settings_provider()
+        directory = feature_directory(settings.output_dir, "knowledge_archives")
+        path = directory / ("archive_" + job_id + ".md")
+        title = document["title"].replace("\n", " ")
+        parts = ["# " + title + " · 知识归档", "", "本次归档的全部知识点。知识库保留独立索引用于检索；本文是归档时的内容快照。", "",
+                 "归档日期：" + time.strftime("%Y-%m-%d %H:%M", time.localtime(document["created_at"])), ""]
+        if not document["points"]:
+            parts.append("本次对话未发现可复用的知识点，完整聊天记录已归档保留。")
+        for index, point in enumerate(document["points"], 1):
+            parts.extend(["## {}. {}".format(index, point["title"].replace("\n", " ")), "", point["content"], ""])
+            if point.get("tags"):
+                parts.extend(["主题：" + "、".join(point["tags"]), ""])
+            parts.extend(["对话来源：消息 " + "、".join(map(str, point.get("message_ids", []))), ""])
+            if point.get("source_urls"):
+                parts.extend(["来源链接：", "", *["- [资料 {}]({})".format(n, url) for n, url in enumerate(point["source_urls"], 1)], ""])
+        atomic_text(path, "\n".join(parts).rstrip() + "\n")
+        relative = path.relative_to(settings.output_dir.resolve()).as_posix()
+        return {**result, "document": {"title": title + " · 知识归档", "name": relative,
+            "artifact_id": hashlib.sha256(relative.encode()).hexdigest()[:16], "url": "/outputs/" + quote(relative, safe="/")}}
+
+    def _backfill_documents(self):
+        with self.connect() as db:
+            jobs = [self._job(row) for row in db.execute("SELECT * FROM knowledge_ingestions WHERE status='completed'")]
+        for job in jobs:
+            if job["status"] != "completed" or not job.get("result") or job["result"].get("document"):
+                continue
+            try:
+                result = self._write_document(job["id"], job["result"])
+                self._update(job["id"], result=json.dumps(result, ensure_ascii=False))
+            except Exception as exc:
+                if self.logger:
+                    self.logger.error("知识归档文档补存失败：%s", type(exc).__name__)
+
+    def archives(self):
+        root = self.settings_provider().output_dir.resolve()
+        archives = []
+        for job in self.jobs():
+            document = (job.get("result") or {}).get("document")
+            if document:
+                path = root / document["name"]
+                archives.append({**document, "id": job["id"], "created_at": job["created_at"],
+                    "count": job["result"]["count"], "available": path.is_file() and not path.is_symlink()})
+        return archives
 
     def request(self, snapshot):
         fingerprint = hashlib.sha256(json.dumps(snapshot["messages"], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
@@ -340,10 +419,14 @@ class KnowledgeService:
                 snapshot = json.loads(row[0])
                 job_secret = self.settings_provider().api_key
                 self._update(job_id, status="running", stage="开始提取知识")
-                points = self._extract(snapshot, token, lambda stage: self._update(job_id, stage=stage))
+                result = self.store.batch(job_id)
+                if result is None:
+                    points = self._extract(snapshot, token, lambda stage: self._update(job_id, stage=stage))
+                    token.check()
+                    result = self.store.ingest(job_id, snapshot, points)
                 token.check()
-                result = self.store.ingest(job_id, snapshot, points)
-                stage = "已整理 {} 条知识".format(result["count"]) if result["count"] else "未发现可复用的知识点，归档已保留"
+                result = self._write_document(job_id, result)
+                stage = "已保存 1 份归档文档，整理 {} 条知识".format(result["count"]) if result["count"] else "未发现可复用的知识点，归档已保留"
                 self._update(job_id, status="completed", stage=stage, result=json.dumps(result), finished_at=time.time(), error=None)
             except RunCancelled:
                 self._update(job_id, status="interrupted", stage="知识提取已中断，可重试", finished_at=time.time())

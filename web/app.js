@@ -8,7 +8,7 @@
   const activeStatuses = new Set(['queued', 'running']);
   const statusNames = { queued: '等待处理', running: '处理中', completed: '已完成', failed: '执行失败', interrupted: '已中断', cancelled: '已取消', missed: '已跳过', deleted: '已移入回收站' };
   Object.assign(state, {conversations: [], chatRunId: null, watchGeneration: 0, chatSources: [], conversationEdit: null});
-  Object.assign(state, {conversationScope:'active', conversationArchived:false, knowledgeJobs:[], knowledgePollTimer:null, knowledgeEntry:null});
+  Object.assign(state, {conversationScope:'active', conversationArchived:false, knowledgeJobs:[], knowledgePollTimer:null, knowledgeEntry:null, chatAttachment:null, chatUploading:false, paperSubmitting:false, resultHome:'video'});
   const dateFormat = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
   const fullDateFormat = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
 
@@ -59,6 +59,37 @@
     }
   }
 
+  async function uploadPaper(file) {
+    if (!file || !/\.pdf$/i.test(file.name) || !file.size || file.size > 20 * 1024 * 1024) throw new Error('请选择不超过 20 MB 的 PDF 文件。');
+    if (!state.status?.csrf_token) throw new Error('请先连接本地服务。');
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 60000);
+    try {
+      const response = await fetch('/api/papers/upload', {method:'POST', credentials:'same-origin', signal:controller.signal,
+        headers:{'Content-Type':'application/pdf','X-Agent-Token':state.status.csrf_token,'X-File-Name':encodeURIComponent(file.name)},body:file});
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '论文上传失败。');
+      return data.paper;
+    } catch (error) {
+      if (error.name === 'AbortError') throw new Error('论文上传超时，请重试。');
+      throw error;
+    } finally { clearTimeout(timer); }
+  }
+
+  function renderChatAttachment() {
+    $('chat-attachment').hidden = !state.chatAttachment;
+    $('chat-attachment-name').textContent = state.chatAttachment ? '论文附件：' + state.chatAttachment.filename : '';
+  }
+
+  function updatePaperSource() {
+    const mode = $('paper-source').value;
+    for (const [kind,id] of [['url','paper-url'],['text','paper-text'],['pdf','paper-file']]) {
+      $(`paper-${kind}-field`).hidden = mode !== kind;
+      $(id).disabled = mode !== kind;
+      $(id).required = mode === kind;
+    }
+    inlineError('paper-error');
+  }
+
   function setConnection(connected, message = '') {
     state.connected = connected;
     $('connection-dot').className = `status-dot ${connected ? 'is-ready' : 'is-error'}`;
@@ -103,6 +134,7 @@
     }
     $('scheduler-status').textContent = status.scheduler_running ? '本地定时服务正在运行' : '本地定时服务尚未运行';
     const dependencyRows = [
+      { name: '论文 PDF 读取', description: '提取论文文字，扫描版暂不支持 OCR', ready: dependencies.paper_pdf, missing: '缺少 pypdf' },
       { name: '视频内容读取', description: '用于读取平台字幕与媒体', ready: dependencies.yt_dlp, missing: '缺少 yt-dlp' },
       { name: 'YouTube 平台支持', description: '用于解析 YouTube 视频内容', ready: dependencies.javascript_runtime, missing: '尚未准备运行时' },
       { name: '关键画面提取', description: '用于提取视频原图', ready: dependencies.ffmpeg, missing: '缺少 FFmpeg' },
@@ -117,9 +149,14 @@
     const ready = state.connected && state.status?.api_key_configured && state.status?.dependencies?.yt_dlp;
     $('summarize-button').disabled = state.submitting || !ready;
     $('summarize-button').querySelector('span').textContent = state.submitting ? '正在提交…' : '生成视频笔记';
-    $('schedule-submit').disabled = !state.connected || !state.capabilities.length;
+    $('schedule-submit').disabled = !state.connected || !state.capabilities.length || Boolean(state.scheduleUploading);
     $('settings-submit').disabled = !state.connected;
-    $('chat-submit').disabled = !state.connected || !state.status?.api_key_configured || state.chatBusy || state.conversationArchived;
+    $('paper-submit').disabled = !state.connected || !state.status?.api_key_configured || state.paperSubmitting;
+    $('paper-submit').querySelector('span').textContent = state.paperSubmitting ? '正在提交…' : '生成论文笔记';
+    $('chat-attach').disabled = !state.connected || state.chatBusy || state.chatUploading || state.conversationArchived;
+    $('chat-attach').textContent = state.chatUploading ? '正在上传…' : '附加论文 PDF';
+    $('chat-attachment-remove').disabled = state.chatBusy;
+    $('chat-submit').disabled = !state.connected || !state.status?.api_key_configured || state.chatBusy || state.chatUploading || state.conversationArchived;
     $('chat-input').disabled = state.conversationArchived;
     $('chat-submit').querySelector('span').textContent = state.chatBusy ? '正在处理…' : '发送';
     $('chat-new').disabled = !state.connected;
@@ -144,6 +181,8 @@
     const properties = capabilityInfo(item?.capability || 'video_summary')?.input_schema?.properties || {};
     return Object.entries(parameters).filter(([name]) => !properties[name]?.writeOnly).map(([name, value]) => {
       const title = properties[name]?.title || name;
+      if (name === 'paper_text') return `论文原文：${String(value).length} 字`;
+      if (name === 'upload_id') return '已上传 PDF';
       const text = typeof value === 'boolean' ? value ? '开启' : '关闭' : typeof value === 'object' ? JSON.stringify(value) : String(value ?? '');
       return `${title}：${text}`;
     }).join(' · ');
@@ -192,10 +231,23 @@
         });
         const defaultIndex = field.enum.findIndex((value) => value === field.default);
         input.value = draft[name] ?? String(defaultIndex >= 0 ? defaultIndex : 0);
-      } else if (field.type === 'object' || field.type === 'array') {
+      } else if (field.format === 'paper-upload') {
+        input = document.createElement('input'); input.type = 'hidden'; input.value = draft[name] || '';
+        const file = document.createElement('input'); file.type = 'file'; file.accept = 'application/pdf,.pdf'; file.className = 'text-input'; file.id = label.htmlFor + '-file'; label.htmlFor = file.id;
+        const caption = document.createElement('p'); caption.className = 'field-help'; caption.textContent = input.value ? '已有论文附件，可重新选择' : '选择 PDF 后自动上传';
+        file.addEventListener('change', async () => {
+          if (!file.files[0]) return;
+          file.disabled = true; state.scheduleUploading = true; updateSubmitState(); caption.textContent = '正在上传…';
+          try { const paper = await uploadPaper(file.files[0]); input.value = paper.upload_id; caption.textContent = paper.filename; rememberScheduleDraft(); }
+          catch (error) { input.value = ''; caption.textContent = error.message; }
+          finally { file.disabled = false; state.scheduleUploading = false; updateSubmitState(); }
+        });
+        wrapper.append(file, caption);
+      } else if (field.format === 'multiline' || field.type === 'object' || field.type === 'array') {
         input = document.createElement('textarea');
         input.rows = 3;
         input.value = draft[name] ?? (field.default !== undefined ? JSON.stringify(field.default, null, 2) : '');
+        if (field.maxLength !== undefined) input.maxLength = field.maxLength;
       } else {
         input = document.createElement('input');
         input.type = field.type === 'boolean' ? 'checkbox' : ['number', 'integer'].includes(field.type) ? 'number' : field.writeOnly ? 'password' : field.format === 'uri' || field.format === 'url' ? 'url' : field.format === 'email' ? 'email' : 'text';
@@ -209,14 +261,14 @@
         if (field.maxLength !== undefined) input.maxLength = field.maxLength;
         if (field.minLength !== undefined) input.minLength = field.minLength;
       }
-      input.id = label.htmlFor;
+      input.id = field.format === 'paper-upload' ? label.htmlFor + '-value' : label.htmlFor;
       input.dataset.parameter = name;
       if (field.type !== 'boolean') input.className = 'text-input';
       input.required = required.has(name) && field.type !== 'boolean';
       input.autocomplete = 'off';
       input.placeholder = field.placeholder || (['object', 'array'].includes(field.type) ? '填写 JSON 格式的输入' : '');
       if (field.type === 'boolean') { label.prepend(input); wrapper.append(label); }
-      else wrapper.append(label, input);
+      else {wrapper.prepend(label);wrapper.append(input);}
       if (field.description) {
         const help = document.createElement('p');
         help.id = `${input.id}-help`;
@@ -336,7 +388,7 @@
     status.hidden = !data.archived_at && !job;
     if (status.hidden) return;
     const heading = data.archived_at ? '这段对话已归档。恢复后可以继续交流。' : '这段对话已恢复。';
-    status.innerHTML = `<p>${escapeHTML(heading)}</p>${job ? `<p>${escapeHTML(job.stage)}${job.error ? '：'+escapeHTML(job.error) : ''}</p>${['failed','interrupted'].includes(job.status) ? `<button type="button" class="text-button" data-knowledge-retry="${escapeHTML(job.id)}">重试知识提取</button>` : ''}${job.status === 'completed' ? '<button type="button" class="text-button" data-go="knowledge">查看个人知识库</button>' : ''}` : '<small>本次仅归档，未提取知识。</small>'}`;
+    status.innerHTML = `<p>${escapeHTML(heading)}</p>${job ? `<p>${escapeHTML(job.stage)}${job.error ? '：'+escapeHTML(job.error) : ''}</p>${['failed','interrupted'].includes(job.status) ? `<button type="button" class="text-button" data-knowledge-retry="${escapeHTML(job.id)}">重试知识提取</button>` : ''}${job.status === 'completed' ? `${job.result?.document ? `<button type="button" class="text-button" data-artifact-open="${escapeHTML(job.result.document.artifact_id)}">打开归档文档</button>` : ''}<button type="button" class="text-button" data-go="knowledge">查看个人知识库</button>` : ''}` : '<small>本次仅归档，未提取知识。</small>'}`;
   }
 
   function ensureKnowledgePolling() {
@@ -349,7 +401,11 @@
   }
 
   async function refreshKnowledge() {
-    const [data,trash,jobs]=await Promise.all([api('/api/knowledge?query='+encodeURIComponent($('knowledge-query').value.trim())),api('/api/knowledge/trash'),api('/api/knowledge/ingestions')]);
+    const [data,trash,jobs,archiveData]=await Promise.all([api('/api/knowledge?query='+encodeURIComponent($('knowledge-query').value.trim())),api('/api/knowledge/trash'),api('/api/knowledge/ingestions'),api('/api/knowledge/archives')]);
+    const archives=archiveData.archives||[];
+    $('knowledge-archive-count').textContent=`${archives.filter(item=>item.available).length} 份`;
+    $('knowledge-archives').innerHTML=archives.length ? archives.map(item=>`<article class="card knowledge-card"><h3>${escapeHTML(item.title)}</h3><p>一份文档 · 包含 ${Number(item.count)} 条知识点</p><small>${escapeHTML(formatTime(item.created_at,true))}</small><div class="archive-document-actions">${item.available ? `<button type="button" class="text-button" data-artifact-open="${escapeHTML(item.artifact_id)}">打开归档文档</button><button type="button" class="text-button" data-artifact-delete="${escapeHTML(item.artifact_id)}">移除文档</button>` : '<span class="field-help">文档已移除，可在内容库回收站恢复。知识索引仍保留。</span>'}</div></article>`).join('') : emptyState('归档整理成一份文档','选择“整理知识并入库”后，全部知识点会自动保存为一份归档文档。','file');
+    if($('knowledge-query').value.trim())$('knowledge-index').open=true;
     $('knowledge-database').textContent='保存位置：'+data.database;
     $('knowledge-count').textContent=data.entries.length===data.total?`${data.total} 条`:`显示 ${data.entries.length} 条 · 共 ${data.total} 条`;
     $('knowledge-list').innerHTML=data.entries.length ? data.entries.map(entry=>`<button type="button" class="card knowledge-card" data-knowledge-open="${escapeHTML(entry.id)}"><h3>${escapeHTML(entry.title)}</h3><div class="knowledge-tags">${entry.tags.map(tag=>`<span>${escapeHTML(tag)}</span>`).join('')}</div><p>${escapeHTML(entry.excerpt)}</p><small>${escapeHTML(formatTime(entry.updated_at,true))} · 查看知识与来源</small></button>`).join('') : emptyState('知识从一次归档开始','归档对话时选择“整理知识并入库”，知识点就会出现在这里。','file');
@@ -412,7 +468,8 @@
     state.chatBusy = true; updateSubmitState();
     const conversationId = state.conversationId;
     try {
-      const response = await api('/api/chat/start', 'POST', {message,conversation_id:conversationId,retry,web_enabled:$('chat-web').checked});
+      const response = await api('/api/chat/start', 'POST', {message,conversation_id:conversationId,retry,web_enabled:$('chat-web').checked,attachments:!retry && state.chatAttachment ? [state.chatAttachment.upload_id] : []});
+      if(!retry){state.chatAttachment=null;renderChatAttachment();}
       if (state.conversationId !== conversationId) return;
       if (!retry && $('chat-input').value.trim() === message) $('chat-input').value = '';
       applyConversation(response.conversation);
@@ -504,6 +561,7 @@
   }
   function applyConversation(data) {
     state.watchGeneration += 1;
+    if(state.conversationId && state.conversationId!==data.conversation_id){state.chatAttachment=null;renderChatAttachment();}
     const changed=state.conversationId!==data.conversation_id || state.conversationArchived!==Boolean(data.archived_at);
     state.conversationId = data.conversation_id || null;
     state.conversationArchived=Boolean(data.archived_at);
@@ -525,10 +583,10 @@
   }
 
   async function refreshLibrary() {
-    const [data, trash] = await Promise.all([api('/api/artifacts'), api('/api/artifacts/trash')]);
+    const [data, trash] = await Promise.all([api('/api/artifacts?category='+encodeURIComponent($('library-category').value)), api('/api/artifacts/trash')]);
     $('library-directory').textContent = `保存位置：${data.directory || state.status?.output_dir || ''}`;
-    const items = data.artifacts || [];
-    $('library-list').innerHTML = items.length ? items.map((item) => `<div class="library-row"><div><strong>${escapeHTML(item.title)}</strong><small>${escapeHTML(formatTime(item.modified_at, true))}</small></div><div class="library-actions"><button class="text-button" data-artifact-open="${escapeHTML(item.id)}">打开</button><button class="text-button" data-artifact-delete="${escapeHTML(item.id)}">移入回收站</button></div></div>`).join('') : '<p class="field-help">内容库还没有文本。完成的任务会自动保存在这里。</p>';
+    const items = (data.artifacts || []).filter(item=>!$('library-category').value || item.category===$('library-category').value);
+    $('library-list').innerHTML = items.length ? items.map((item) => `<div class="library-row"><div><strong>${escapeHTML(item.title)}</strong><small>${escapeHTML(item.folder || '本地文档')} · ${escapeHTML(formatTime(item.modified_at, true))}</small></div><div class="library-actions"><button class="text-button" data-artifact-open="${escapeHTML(item.id)}">打开</button><button class="text-button" data-artifact-delete="${escapeHTML(item.id)}">移入回收站</button></div></div>`).join('') : '<p class="field-help">内容库还没有文本。完成的任务会自动保存在这里。</p>';
     $('library-trash').innerHTML = (trash.artifacts || []).map((item) => `<div class="library-row"><span>${escapeHTML(item.title)}</span><button class="text-button" data-artifact-restore="${escapeHTML(item.trash_id)}">恢复</button></div>`).join('') || '<p class="field-help">回收站为空。</p>';
   }
 
@@ -538,7 +596,8 @@
       if (!$('result-dialog').open) $('result-dialog').showModal();
     } else {
       if ($('result-dialog').open) $('result-dialog').close();
-      $('video-result-home').after($('result-card'));
+      state.resultHome=state.view==='paper'?'paper':'video';
+      $(`${state.resultHome}-result-home`).after($('result-card'));
     }
   }
 
@@ -549,13 +608,17 @@
   }
 
   function renderReports() {
-    const reports = state.reports.slice(0, 6);
-    $('report-count').textContent = state.reports.length ? `${state.reports.length} 份` : '';
+    const papers=state.reports.filter(item=>item.category==='paper_summary');
+    $('paper-report-count').textContent=papers.length?`${papers.length} 份`:'';
+    $('paper-reports').innerHTML=papers.length?papers.slice(0,6).map(report=>`<button class="report-card" data-report-index="${state.reports.indexOf(report)}"><h3>${escapeHTML(report.title)}</h3><span class="report-card-meta">${escapeHTML(formatTime(report.modified_at))} · 已保存</span></button>`).join(''):emptyState('第一份论文笔记，从材料开始','提供原文、链接或 PDF 后，结果会自动保存在这里。','file');
+    const videos=state.reports.filter(item=>item.category==='video_summary' || item.category==='legacy');
+    const reports = videos.slice(0, 6);
+    $('report-count').textContent = videos.length ? `${videos.length} 份` : '';
     if (!reports.length) {
       $('recent-reports').innerHTML = emptyState('第一份笔记，从一个链接开始', '生成后的笔记会出现在这里，随时预览或下载。');
       return;
     }
-    $('recent-reports').innerHTML = reports.map((report, index) => `<button class="report-card" data-report-index="${index}"><span class="report-card-head"><span class="report-icon">${icons('file')}</span>${icons('arrow')}</span><h3>${escapeHTML(report.title || report.name || '视频笔记')}</h3><span class="report-card-meta"><span>${escapeHTML(formatTime(report.modified_at))}</span><span>Markdown · ${escapeHTML(formatSize(report.size))}</span></span></button>`).join('');
+    $('recent-reports').innerHTML = reports.map((report, index) => `<button class="report-card" data-report-index="${state.reports.indexOf(report)}"><span class="report-card-head"><span class="report-icon">${icons('file')}</span>${icons('arrow')}</span><h3>${escapeHTML(report.title || report.name || '视频笔记')}</h3><span class="report-card-meta"><span>${escapeHTML(formatTime(report.modified_at))}</span><span>Markdown · ${escapeHTML(formatSize(report.size))}</span></span></button>`).join('');
   }
   function formatSize(size) {
     if (!Number.isFinite(Number(size))) return '笔记';
@@ -564,15 +627,17 @@
 
   function renderProgress() {
     const task = state.currentTask;
-    const card = $('progress-card');
+    const paper=task?.capability==='paper_summary';
+    const card = $(paper?'paper-progress-card':'progress-card');
+    $(paper?'progress-card':'paper-progress-card').hidden=true;
     card.hidden = !task;
     if (!task) return;
     const isActive = activeStatuses.has(task.status);
     const failed = ['failed', 'interrupted'].includes(task.status);
     const elapsed = Math.max(0, Math.floor(((task.finished_at || Date.now() / 1000) - Number(task.created_at))));
     const elapsedText = Number.isFinite(elapsed) ? elapsed < 60 ? `${elapsed} 秒` : `${Math.floor(elapsed / 60)} 分 ${elapsed % 60} 秒` : '';
-    const title = isActive ? '正在为你整理视频' : task.status === 'completed' ? '这份视频笔记，已经整理好了' : task.status === 'interrupted' ? '任务已中断' : '这次整理没有完成';
-    const description = isActive ? '可切换页面，任务会继续处理。' : task.status === 'completed' ? `${Number(task.sections) || 0} 个内容分段 · ${Number(task.frames) || 0} 张关键画面` : task.error || '请查看本地运行情况后重试。';
+    const title = isActive ? '正在处理'+capabilityTitle(task) : task.status === 'completed' ? '这份笔记，已经整理好了' : task.status === 'interrupted' ? '任务已中断' : '这次整理没有完成';
+    const description = isActive ? '可切换页面，任务会继续处理。' : task.status === 'completed' ? `${Number(task.sections) || 0} 个内容分段${paper?'':' · '+(Number(task.frames)||0)+' 张关键画面'}` : task.error || '请查看本地运行情况后重试。';
     card.className = `card progress-card${failed ? ' is-failed' : ''}`;
     card.innerHTML = `<div class="progress-icon">${isActive ? '<span class="spinner" aria-hidden="true"></span>' : icons(failed ? 'alert' : 'check')}</div><div class="progress-content"><div class="progress-topline"><strong>${escapeHTML(title)}</strong><span class="progress-time">${escapeHTML(elapsedText)}</span></div><p>${escapeHTML(description)}</p>${isActive ? `<p class="progress-detail">${escapeHTML(task.stage || statusNames[task.status])}</p>` : ''}${failed ? '<button class="text-button" data-retry-task>重新填写并尝试 ' + icons('arrow') + '</button>' : ''}</div>`;
   }
@@ -801,9 +866,10 @@
     state.currentTask = task;
     state.activeReport = null;
     renderProgress();
-    if (state.view === 'chat' && !shouldScroll) return;
+    if (!shouldScroll && !['video','paper'].includes(state.view)) return;
     if (task.status === 'completed' && task.markdown) {
-      placeResult(state.view === 'chat');
+      if(shouldScroll && !['chat','knowledge','history'].includes(state.view)) await setView(task.capability==='paper_summary'?'paper':'video',false);
+      placeResult(!['video','paper'].includes(state.view));
       await showResult(task.markdown, task.title, `${formatTime(task.finished_at, true)} · ${task.model || 'DeepSeek'} · 保存在本机`, task.output_file, `task:${task.id}:${task.finished_at}`);
     } else {
       state.resultSignature = '';
@@ -814,8 +880,10 @@
         if (task.status !== 'completed') toast(task.status === 'deleted' ? '这份内容已移入回收站，可在内容库恢复。' : task.stage || statusNames[task.status]);
         return;
       }
-      await setView('video', false);
-      ($('result-card').hidden ? $('progress-card') : $('result-card')).scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if(['knowledge','history'].includes(state.view)) { if(task.status!=='completed')toast(task.stage||statusNames[task.status]);return; }
+      const destination=task.capability==='paper_summary'?'paper':'video';
+      await setView(destination, false);
+      ($('result-card').hidden ? $(destination==='paper'?'paper-progress-card':'progress-card') : $('result-card')).scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
   }
 
@@ -826,9 +894,9 @@
     if (!response.ok) throw new Error('未能读取笔记文件，请刷新后重试。');
     const markdown = await response.text();
     state.activeReport = report;
-    const inConversation = state.view === 'chat';
+    const inConversation = !['video','paper'].includes(state.view);
+    if(!inConversation) await setView(url.includes('/paper_summary/')?'paper':'video',false);
     placeResult(inConversation);
-    await setView(inConversation ? 'chat' : 'video', false);
     await showResult(markdown, report.title || report.name, `${formatTime(report.modified_at, true)} · Markdown · 保存在本机`, url, `report:${url}:${report.modified_at}`);
     if (!inConversation) $('result-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -985,9 +1053,9 @@
   }
 
   async function setView(view, reload = true) {
-    if (!['chat', 'knowledge', 'video', 'schedules', 'history', 'settings'].includes(view)) view = 'chat';
+    if (!['chat', 'knowledge', 'video', 'paper', 'schedules', 'history', 'settings'].includes(view)) view = 'chat';
     state.view = view;
-    const labels = { chat: '与 Agent 对话', knowledge:'个人知识库', video: '视频总结', schedules: '定时任务', history: '运行记录', settings: '模型设置' };
+    const labels = { chat: '与 Agent 对话', knowledge:'个人知识库', video: '视频总结', paper:'论文总结', schedules: '定时任务', history: '运行记录', settings: '模型设置' };
     document.querySelectorAll('.view').forEach((element) => { element.hidden = element.id !== `view-${view}`; });
     document.querySelectorAll('.nav-item').forEach((element) => {
       const selected = element.dataset.view === view;
@@ -1008,7 +1076,7 @@
         if (view === 'schedules' || view === 'history') await refreshSchedules();
         if (view === 'chat') await Promise.all([refreshConversation(), refreshLibrary()]);
         if (view === 'knowledge') await refreshKnowledge();
-        if (view === 'history' || view === 'video') {
+        if (view === 'history' || view === 'video' || view === 'paper') {
           const [tasks, reports] = await Promise.all([api('/api/tasks'), api('/api/reports')]);
           state.tasks = tasks.tasks || [];
           state.reports = reports.reports || [];
@@ -1157,7 +1225,7 @@
         button.disabled = true;
         try {
           await api(artifactDelete ? '/api/artifacts/delete' : '/api/artifacts/restore', 'POST', artifactDelete ? {artifact_ids:[button.dataset.artifactDelete]} : {trash_ids:[button.dataset.artifactRestore]});
-          await Promise.all([refreshLibrary(), refreshAll()]);
+          await Promise.all([refreshLibrary(), refreshAll(), refreshKnowledge()]);
           toast(artifactDelete ? '已移入回收站，可以恢复' : '内容已恢复');
         } finally { button.disabled = false; }
         return;
@@ -1181,6 +1249,10 @@
         return;
       }
       if (event.target.closest('[data-retry-task]') && state.currentTask) {
+        if(state.currentTask.capability!=='video_summary'){
+          const result=await api('/api/tasks','POST',{capability:state.currentTask.capability,parameters:state.currentTask.parameters});
+          state.tasks.unshift(result.task);await openTask(result.task.id,true);renderTasks();toast('已重新提交');return;
+        }
         $('video-url').value = state.currentTask.url || '';
         $('include-frames').checked = Boolean(state.currentTask.include_frames);
         $('clear-url').hidden = !$('video-url').value;
@@ -1194,13 +1266,39 @@
   });
   document.querySelector('.brand').addEventListener('click', (event) => { event.preventDefault(); setView('chat'); });
   $('library-refresh').addEventListener('click', () => refreshLibrary().catch(error => toast(error.message, true)));
-  $('result-dialog').addEventListener('close', () => $('video-result-home').after($('result-card')));
+  $('result-dialog').addEventListener('close', () => $(`${state.resultHome}-result-home`).after($('result-card')));
   $('chat-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     if (state.chatBusy) return;
     const message = $('chat-input').value.trim();
-    if (!message) return;
+    if (!message && !state.chatAttachment) return;
     await submitChat(message);
+  });
+  $('library-category').addEventListener('change',()=>refreshLibrary().catch(error=>toast(error.message,true)));
+  $('chat-attach').addEventListener('click',()=>$('chat-paper-file').click());
+  $('chat-paper-file').addEventListener('change',async()=>{
+    const file=$('chat-paper-file').files[0];if(!file)return;
+    const conversationId=state.conversationId;
+    state.chatUploading=true;updateSubmitState();inlineError('chat-error');
+    try{const paper=await uploadPaper(file);if(state.conversationId===conversationId){state.chatAttachment=paper;renderChatAttachment();}}
+    catch(error){inlineError('chat-error',error.message);}
+    finally{state.chatUploading=false;$('chat-paper-file').value='';updateSubmitState();}
+  });
+  $('chat-attachment-remove').addEventListener('click',()=>{state.chatAttachment=null;renderChatAttachment();});
+  $('paper-source').addEventListener('change',updatePaperSource);
+  $('paper-form').addEventListener('submit',async event=>{
+    event.preventDefault();if(state.paperSubmitting)return;
+    inlineError('paper-error');state.paperSubmitting=true;updateSubmitState();
+    try{
+      const parameters={}, mode=$('paper-source').value;
+      if(mode==='url')parameters.url=$('paper-url').value.trim();
+      else if(mode==='text')parameters.paper_text=$('paper-text').value.trim();
+      else {const paper=await uploadPaper($('paper-file').files[0]);parameters.upload_id=paper.upload_id;}
+      if($('paper-title').value.trim())parameters.title=$('paper-title').value.trim();
+      const result=await api('/api/tasks','POST',{capability:'paper_summary',parameters});
+      state.tasks.unshift(result.task);await openTask(result.task.id,true);renderTasks();toast('论文总结已提交，完成后自动保存');
+    }catch(error){inlineError('paper-error',error.message);}
+    finally{state.paperSubmitting=false;updateSubmitState();}
   });
   $('chat-new').addEventListener('click', async () => {
     try { applyConversation(await api('/api/conversations/new', 'POST', {})); await refreshConversations(); inlineError('chat-error'); }
@@ -1283,6 +1381,8 @@
   window.addEventListener('pagehide', () => { clearTimeout(state.pollTimer); state.pollTimer = null; clearTimeout(state.knowledgePollTimer);state.knowledgePollTimer=null; });
   window.addEventListener('pageshow', ensurePolling);
   window.addEventListener('pageshow', ensureKnowledgePolling);
+  updatePaperSource();
+  renderChatAttachment();
   updateScheduleTime();
   updateSubmitState();
   setView(location.hash.slice(1) || 'chat', false);

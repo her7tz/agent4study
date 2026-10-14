@@ -24,6 +24,9 @@ class BusinessHarness:
         self.tools.register(Tool("inspect_result", "读取当前成果的正文摘录、来源与保存状态，判断任务是否满足要求。", empty, lambda args, ctx: self.inspect()))
         self.tools.register(Tool("finish_task", "检查成果存在且满足当前业务的完成条件，再结束任务。", empty, lambda args, ctx: self.finish(), "write"))
 
+    def task_description(self):
+        return self.parameters
+
     def instructions(self):
         return ("你是独立的" + self.title + "业务 Agent，只处理给定任务。你的历史与主会话隔离。"
                 "使用 produce_result 完成业务处理，再 inspect_result 检查成果，最后 finish_task。"
@@ -107,7 +110,34 @@ class ResearchHarness(BusinessHarness):
         return result
 
 
-BUSINESS_HARNESSES = {"video_summary": VideoHarness, "web_research": ResearchHarness}
+class PaperHarness(BusinessHarness):
+    role, title = "paper_summary", "论文总结"
+    time_budget = 2400
+
+    def task_description(self):
+        # Keep the coordinator history small; original materials stay in its tool.
+        return {key: ("已提供原文，{} 字".format(len(value)) if key == "paper_text" else value)
+                for key, value in self.parameters.items()}
+
+    def execute(self):
+        from dataclasses import replace
+        from paper_summary import summarize_paper
+        context = replace(self.context, client=self.shared.model, progress=self.shared.progress,
+                          cancellation=self.shared.cancellation)
+        result = summarize_paper(self.parameters, context)
+        result.update(self.shared.save_markdown(result["title"], result["markdown"], self.role))
+        return result
+
+    def verify(self):
+        result = super().verify()
+        if not self.result.get("sources") or self.result.get("material_chars", 0) < 200:
+            raise RuntimeError("论文总结缺少实际读取的材料。")
+        if self.result.get("source_scope") not in self.result["markdown"]:
+            raise RuntimeError("论文总结没有说明实际阅读范围。")
+        return result
+
+
+BUSINESS_HARNESSES = {"video_summary": VideoHarness, "web_research": ResearchHarness, "paper_summary": PaperHarness}
 
 
 def register_business_harness(capability_id, harness_type):

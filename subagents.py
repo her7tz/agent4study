@@ -11,7 +11,7 @@ def run_business_subagent(capability_id, parameters, context):
     harness = BUSINESS_HARNESSES[capability_id](parameters, context)
     shared = harness.shared
     messages = [{"role": "system", "content": harness.instructions()},
-                {"role": "user", "content": json.dumps({"goal": harness.title, "parameters": parameters}, ensure_ascii=False)}]
+                {"role": "user", "content": json.dumps({"goal": harness.title, "parameters": harness.task_description()}, ensure_ascii=False)}]
     deadline = time.monotonic() + harness.time_budget
     try:
         for index in range(harness.max_rounds):
