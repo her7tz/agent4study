@@ -27,10 +27,10 @@ class Subagent:
             if factory is not None:
                 operations.append(get_capability(name).metadata())
             else:
-                operations.append({'id':name,'title':'对话知识整理','description':'整理用户选择归档的对话并生成知识文档。'})
+                operations.append({'id':name,'title':'对话知识整理','description':'从用户选择归档的本地对话或 ChatGPT 公开分享链接提取知识；每次保存一份包含全部知识点的文档并纳入个人知识库。'})
         return {'id':self.id,'title':self.title,'description':self.description,'operations':operations,
                 'tools':sorted({name for factory in self.operations.values() if factory for name in getattr(factory,'tool_names',())}),
-                'workflow_steps':[] if self.delegatable else ['知识提取','来源校验','保存归档'],
+                'workflow_steps':[] if self.delegatable else ['读取对话来源','知识提取','来源校验','保存归档'],
                 'default_skills':list(self.skills),'page':self.page or 'agent_'+self.id,'delegatable':self.delegatable}
 
 class SubagentRegistry:
@@ -72,7 +72,7 @@ registry=SubagentRegistry()
 from business_harnesses import VideoHarness, PaperHarness
 registry.register(Subagent('video_learning','视频学习 Agent','理解视频内容，组织知识笔记；拥有字幕、转录、画面和总结处理工具。',{'video_summary':VideoHarness},('video-summary',),('video_summary',),'video'))
 registry.register(Subagent('paper_reading','论文阅读 Agent','阅读论文材料，分析问题、贡献、方法、证据与知识；拥有论文处理工具。',{'paper_summary':PaperHarness},('academic-paper-review','paper-summary'),('paper_summary',),'paper'))
-registry.register(Subagent('knowledge_archivist','知识整理 Agent','整理用户选择归档的对话，管理知识证据和归档文档。',{'conversation_knowledge':None},('knowledge-extraction',),('conversation_knowledge',),'archivist',False))
+registry.register(Subagent('knowledge_archivist','知识整理 Agent','整理本地归档对话与 ChatGPT 公开分享对话，管理知识证据、个人知识库和归档文档。',{'conversation_knowledge':None},('knowledge-extraction',),('conversation_knowledge',),'archivist',False))
 
 def canonical_role(role):
     if role in {'global','conversation'}:return role

@@ -8,7 +8,7 @@
   const activeStatuses = new Set(['queued', 'running']);
   const statusNames = { queued: '等待处理', running: '处理中', completed: '已完成', failed: '执行失败', interrupted: '已中断', waiting_user: '等待论文材料', cancelled: '已取消', missed: '已跳过', deleted: '已移入回收站' };
   Object.assign(state, {conversations: [], chatRunId: null, watchGeneration: 0, chatSources: [], conversationEdit: null});
-  Object.assign(state, {conversationScope:'active', conversationArchived:false, knowledgeJobs:[], knowledgePollTimer:null, knowledgeEntry:null, chatAttachment:null, chatUploading:false, paperSubmitting:false, resultHome:'video'});
+  Object.assign(state, {conversationScope:'active', conversationArchived:false, knowledgeJobs:[], knowledgePollTimer:null, knowledgeEntry:null, knowledgeShareSubmitting:false, knowledgeShareJobId:null, chatAttachment:null, chatUploading:false, paperSubmitting:false, resultHome:'video'});
   const dateFormat = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
   const fullDateFormat = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
 
@@ -401,27 +401,64 @@
     },2500);
   }
 
+  function sharedConversationURL(value) {
+    try {
+      const url=new URL(String(value||'').trim());
+      if(url.protocol!=='https:' || !['chatgpt.com','chat.openai.com'].includes(url.hostname.toLowerCase()) || url.username || url.password || url.port || !/^\/share\/[A-Za-z0-9][A-Za-z0-9_-]{7,127}\/?$/.test(url.pathname))return null;
+      return `${url.origin}${url.pathname.replace(/\/$/,'')}`;
+    }catch{return null;}
+  }
+
+  function knowledgeSourceHTML(source) {
+    const shared=source.source_type==='chatgpt_share' || String(source.conversation_id||'').startsWith('share:');
+    if(shared){
+      const url=sharedConversationURL(source.source_url);
+      return url ? `<a class="source-link" href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer">打开 ChatGPT 分享来源</a>` : '<small class="field-help">ChatGPT 分享来源链接不可用</small>';
+    }
+    return source.conversation_id && (!source.source_type || source.source_type==='conversation') ? `<button class="text-button" type="button" data-conversation="${escapeHTML(source.conversation_id)}">打开本地来源对话</button>` : '';
+  }
+
+  function knowledgeJobHTML(job) {
+    const shared=job.source_type==='chatgpt_share' || String(job.conversation_id||'').startsWith('share:');
+    const heading=job.source_title || (shared ? 'ChatGPT 分享' : '本地对话归档');
+    const document=job.result?.document;
+    return `<div class="agent-task-line">${statusPill(job.status)}<div><strong>${escapeHTML(heading)}</strong><small>${shared?'ChatGPT 分享':'本地对话'} · ${escapeHTML(formatTime(job.created_at,true))}</small><p>${escapeHTML(job.stage||statusNames[job.status]||'')}</p>${job.error?`<p class="inline-error">${escapeHTML(job.error)}</p>`:''}<div class="archive-document-actions">${knowledgeSourceHTML(job)}${job.status==='completed'&&document?.artifact_id?`<button class="text-button" type="button" data-artifact-open="${escapeHTML(document.artifact_id)}">打开归档文档</button>`:''}${['failed','interrupted'].includes(job.status)?`<button class="text-button" type="button" data-knowledge-retry="${escapeHTML(job.id)}">重试提取</button>`:''}</div></div></div>`;
+  }
+
+  function renderKnowledgeJobs() {
+    const visible=state.knowledgeJobs.filter(job=>['queued','running','failed','interrupted'].includes(job.status)).slice(0,8);
+    $('knowledge-jobs').innerHTML=visible.map(knowledgeJobHTML).join('');
+    const submitted=state.knowledgeJobs.find(job=>job.id===state.knowledgeShareJobId);
+    if(submitted){
+      const notice=$('knowledge-share-status');
+      notice.hidden=false;
+      notice.textContent=`${statusNames[submitted.status]||submitted.status}：${submitted.stage||''}${submitted.status==='completed'?'。归档文档可在下方执行记录中打开。':''}`;
+    }
+    AgentConsole.render();
+    ensureKnowledgePolling();
+  }
+
   async function refreshKnowledge() {
     const [data,trash,jobs,archiveData]=await Promise.all([api('/api/knowledge?query='+encodeURIComponent($('knowledge-query').value.trim())),api('/api/knowledge/trash'),api('/api/knowledge/ingestions'),api('/api/knowledge/archives')]);
     const archives=archiveData.archives||[];
     $('knowledge-archive-count').textContent=`${archives.filter(item=>item.available).length} 份`;
-    $('knowledge-archives').innerHTML=archives.length ? archives.map(item=>`<article class="card knowledge-card"><h3>${escapeHTML(item.title)}</h3><p>一份文档 · 包含 ${Number(item.count)} 条知识点</p><small>${escapeHTML(formatTime(item.created_at,true))}</small><div class="archive-document-actions">${item.available ? `<button type="button" class="text-button" data-artifact-open="${escapeHTML(item.artifact_id)}">打开归档文档</button><button type="button" class="text-button" data-artifact-delete="${escapeHTML(item.artifact_id)}">移除文档</button>` : '<span class="field-help">文档已移除，可在内容库回收站恢复。知识索引仍保留。</span>'}</div></article>`).join('') : emptyState('归档整理成一份文档','选择“整理知识并入库”后，全部知识点会自动保存为一份归档文档。','file');
+    $('knowledge-archives').innerHTML=archives.length ? archives.map(item=>`<article class="card knowledge-card"><h3>${escapeHTML(item.title)}</h3><p>一份文档 · 包含 ${Number(item.count)} 条知识点</p><small>${escapeHTML(formatTime(item.created_at,true))}</small><div class="archive-document-actions">${item.available ? `<button type="button" class="text-button" data-artifact-open="${escapeHTML(item.artifact_id)}">打开归档文档</button><button type="button" class="text-button" data-artifact-delete="${escapeHTML(item.artifact_id)}">移除文档</button>` : '<span class="field-help">文档已移除，可在内容库回收站恢复。知识索引仍保留。</span>'}</div></article>`).join('') : emptyState('每次整理保存一份文档','归档本地对话或导入 ChatGPT 分享后，全部知识点会自动保存为一份文档。','file');
     if($('knowledge-query').value.trim())$('knowledge-index').open=true;
     $('knowledge-database').textContent='保存位置：'+data.database;
     $('knowledge-count').textContent=data.entries.length===data.total?`${data.total} 条`:`显示 ${data.entries.length} 条 · 共 ${data.total} 条`;
-    $('knowledge-list').innerHTML=data.entries.length ? data.entries.map(entry=>`<button type="button" class="card knowledge-card" data-knowledge-open="${escapeHTML(entry.id)}"><h3>${escapeHTML(entry.title)}</h3><div class="knowledge-tags">${entry.tags.map(tag=>`<span>${escapeHTML(tag)}</span>`).join('')}</div><p>${escapeHTML(entry.excerpt)}</p><small>${escapeHTML(formatTime(entry.updated_at,true))} · 查看知识与来源</small></button>`).join('') : emptyState('知识从一次归档开始','归档对话时选择“整理知识并入库”，知识点就会出现在这里。','file');
+    $('knowledge-list').innerHTML=data.entries.length ? data.entries.map(entry=>`<button type="button" class="card knowledge-card" data-knowledge-open="${escapeHTML(entry.id)}"><h3>${escapeHTML(entry.title)}</h3><div class="knowledge-tags">${entry.tags.map(tag=>`<span>${escapeHTML(tag)}</span>`).join('')}</div><p>${escapeHTML(entry.excerpt)}</p><small>${escapeHTML(formatTime(entry.updated_at,true))} · 查看知识与来源</small></button>`).join('') : emptyState('从对话中积累知识','归档本地对话或导入 ChatGPT 分享，整理出的知识点会出现在这里。','file');
     $('knowledge-trash-list').innerHTML=trash.entries.map(entry=>`<div class="library-row"><strong>${escapeHTML(entry.title)}</strong><button class="text-button" type="button" data-knowledge-restore="${escapeHTML(entry.id)}">恢复</button></div>`).join('') || '<p class="field-help">知识回收站为空。</p>';
-    state.knowledgeJobs=jobs.jobs||[];AgentConsole.render();
-    const visible=state.knowledgeJobs.filter(job=>['queued','running','failed','interrupted'].includes(job.status)).slice(0,8);
-    $('knowledge-jobs').innerHTML=visible.map(job=>`<div class="notice ${job.status==='failed'?'notice-warning':'notice-subtle'}"><div><strong>${escapeHTML(job.stage)}</strong>${job.error?`<p>${escapeHTML(job.error)}</p>`:''}<button class="text-button" type="button" data-conversation="${escapeHTML(job.conversation_id)}">查看来源会话</button>${['failed','interrupted'].includes(job.status)?`<button class="text-button" type="button" data-knowledge-retry="${escapeHTML(job.id)}">重试提取</button>`:''}</div></div>`).join('');
-    ensureKnowledgePolling();
+    state.knowledgeJobs=jobs.jobs||[];renderKnowledgeJobs();
   }
 
   async function openKnowledge(id) {
     const {entry}=await api('/api/knowledge/'+encodeURIComponent(id)); state.knowledgeEntry=entry;
     $('knowledge-detail-title').textContent=entry.title;
     $('knowledge-preview').replaceChildren(chatMarkdown(entry.content));
-    $('knowledge-sources').innerHTML='<h3>来源与依据</h3>'+entry.sources.map(source=>`<section class="knowledge-source"><button class="text-button" type="button" data-conversation="${escapeHTML(source.conversation_id)}">${escapeHTML(source.title)} · 打开来源对话</button><small>提取于 ${escapeHTML(formatTime(source.created_at,true))}</small>${source.evidence.map(message=>`<details><summary>${message.role==='user'?'你的消息':'对话回答'} · 来源摘录</summary><p>${escapeHTML(message.content)}</p></details>`).join('')}${source.urls.map(url=>{try{const parsed=new URL(url);return ['https:','http:'].includes(parsed.protocol)?`<a class="source-link" href="${escapeHTML(parsed.href)}" target="_blank" rel="noopener noreferrer">${escapeHTML(parsed.hostname)} · 对话引用</a>`:'';}catch{return '';}}).join('')}</section>`).join('')+(entry.revision>1?'<p class="field-help">此条知识已由你编辑，原始来源保留供查阅。</p>':'');
+    $('knowledge-sources').innerHTML='<h3>来源与依据</h3>'+entry.sources.map(source=>{
+      const shared=source.source_type==='chatgpt_share' || String(source.conversation_id||'').startsWith('share:');
+      return `<section class="knowledge-source"><strong>${escapeHTML(source.title||source.source_title||'来源对话')}</strong><div>${knowledgeSourceHTML(source)}</div><small>${shared?'ChatGPT 分享':'本地对话'} · 提取于 ${escapeHTML(formatTime(source.created_at,true))}</small>${(source.evidence||[]).map(message=>`<details><summary>${message.role==='user'?(shared?'分享中的用户消息':'你的消息'):'对话回答'} · 来源摘录</summary><p>${escapeHTML(message.content)}</p></details>`).join('')}${(source.urls||[]).map(url=>{try{const parsed=new URL(url);return ['https:','http:'].includes(parsed.protocol)&&!parsed.username&&!parsed.password?`<a class="source-link" href="${escapeHTML(parsed.href)}" target="_blank" rel="noopener noreferrer">${escapeHTML(parsed.hostname)} · 对话引用</a>`:'';}catch{return '';}}).join('')}</section>`;
+    }).join('')+(entry.revision>1?'<p class="field-help">此条知识已由你编辑，原始来源保留供查阅。</p>':'');
     $('knowledge-related').innerHTML=entry.related.length ? '<h3>相关知识</h3>'+entry.related.map(item=>`<button type="button" class="text-button" data-knowledge-open="${escapeHTML(item.id)}">${escapeHTML(item.title)}</button>`).join('')+'<p class="field-help">相近内容保留为独立条目，可比较条件与观点。</p>' : '';
     $('knowledge-edit-form').hidden=true; $('knowledge-detail-actions').hidden=false;
     $('knowledge-edit').hidden=Boolean(entry.deleted_at);
@@ -452,7 +489,7 @@
         if (data.conversation) {
           applyConversation(data.conversation);
           if (data.run.error) inlineError('chat-error', data.run.error);
-          await Promise.allSettled([refreshAll(), refreshLibrary(), refreshConversations()]);
+          await Promise.allSettled([refreshAll(), refreshLibrary(), refreshConversations(), refreshKnowledge()]);
           return;
         }
         await new Promise(resolve => setTimeout(resolve, 400));
@@ -487,6 +524,7 @@
       list_subagents: '查看可用 Agent', delegate_subagents: '委派任务', read_subagent_results: '读取任务结果',
       list_current_tasks: '查看任务进度', cancel_task: '取消任务',
       search_personal_knowledge: '检索个人知识库', read_personal_knowledge: '阅读相关知识',
+      import_shared_conversation: '整理聊天分享', read_knowledge_job: '查看知识整理进度', list_knowledge_jobs: '查看知识整理任务',
       update_personal_knowledge: '更新知识', delete_personal_knowledge: '整理知识库', restore_personal_knowledge: '恢复知识',
       list_generated_texts: '查询内容库', read_generated_text: '阅读文档', save_generated_text: '保存文档',
       delete_generated_texts: '整理内容库', list_deleted_texts: '查看回收站', restore_generated_texts: '恢复文档',
@@ -1132,7 +1170,7 @@
       state.status = status;
       setConnection(true);
       renderStatus();
-      const results = await Promise.allSettled([api('/api/tasks'), api('/api/reports'), api('/api/schedules'), api('/api/capabilities'), state.chatBusy ? Promise.resolve(null) : api('/api/conversations/current'),api('/api/subagents')]);
+      const results = await Promise.allSettled([api('/api/tasks'), api('/api/reports'), api('/api/schedules'), api('/api/capabilities'), state.chatBusy ? Promise.resolve(null) : api('/api/conversations/current'),api('/api/subagents'),api('/api/knowledge/ingestions')]);
       if (results[0].status === 'fulfilled') state.tasks = results[0].value.tasks || [];
       if (results[1].status === 'fulfilled') state.reports = results[1].value.reports || [];
       if (results[2].status === 'fulfilled') {
@@ -1145,6 +1183,7 @@
       }
       if (results[4].status === 'fulfilled' && results[4].value && !state.chatBusy) applyConversation(results[4].value);
       if(results[5]?.status==='fulfilled'){state.agents=results[5].value.agents||[];state.parallel=results[5].value.parallel;}
+      if(results[6]?.status==='fulfilled'){state.knowledgeJobs=results[6].value.jobs||[];renderKnowledgeJobs();}
       renderReports();
       renderSchedules();
       renderTasks();
@@ -1445,6 +1484,29 @@
   });
   $('knowledge-refresh').addEventListener('click',()=>refreshKnowledge().catch(error=>toast(error.message,true)));
   $('knowledge-search-form').addEventListener('submit',event=>{event.preventDefault();refreshKnowledge().catch(error=>toast(error.message,true));});
+  $('knowledge-share-form').addEventListener('submit',async event=>{
+    event.preventDefault();
+    if(state.knowledgeShareSubmitting)return;
+    inlineError('knowledge-share-error');
+    const url=sharedConversationURL($('knowledge-share-url').value);
+    if(!url){inlineError('knowledge-share-error','请输入完整的 ChatGPT 公开分享链接，例如 https://chatgpt.com/share/分享标识。');return;}
+    state.knowledgeShareSubmitting=true;$('knowledge-share-submit').disabled=true;
+    const notice=$('knowledge-share-status');notice.hidden=false;notice.textContent='正在提交分享链接…';
+    let accepted=false;
+    try{
+      const title=$('knowledge-share-title').value.trim();
+      const result=await api('/api/knowledge/import-share','POST',{url,...(title?{title}:{})});
+      accepted=true;
+      state.knowledgeShareJobId=result.job.id;
+      state.knowledgeJobs=[result.job,...state.knowledgeJobs.filter(job=>job.id!==result.job.id)];
+      renderKnowledgeJobs();
+      toast(result.job.status==='completed'?'此分享已整理，可打开归档文档':'已安排整理，执行记录会持续更新');
+      await refreshKnowledge();
+    }catch(error){
+      if(accepted){toast('任务已提交，刷新记录时遇到问题：'+error.message,true);ensureKnowledgePolling();}
+      else{notice.hidden=true;inlineError('knowledge-share-error',error.message);}
+    }finally{state.knowledgeShareSubmitting=false;$('knowledge-share-submit').disabled=false;}
+  });
   $('knowledge-close').addEventListener('click',()=>$('knowledge-dialog').close());
   $('knowledge-edit').addEventListener('click',()=>{
     const entry=state.knowledgeEntry;
@@ -1504,7 +1566,7 @@
   materialInput.addEventListener('change',async()=>{const taskId=state.materialTaskId,file=materialInput.files[0];materialInput.value='';if(!file||!taskId)return;
     try{const paper=await uploadPaper(file);await api('/api/tasks/'+encodeURIComponent(taskId)+'/resume','POST',{upload_id:paper.upload_id});await refreshAll();toast('PDF 已导入，原任务继续处理');}catch(error){toast(error.message,true);}
   });
-  AgentConsole.init({api,state,setView,toast});
+  AgentConsole.init({api,state,setView,toast,knowledgeJobHTML});
   AgentControls.init({api,state,toast,refresh:async(name)=>{
     if(!name)return refreshAll();if(name==='library')return refreshLibrary();if(name==='knowledge')return refreshKnowledge();
     if(['schedules','history'].includes(name)){await refreshSchedules();const tasks=await api('/api/tasks');state.tasks=tasks.tasks||[];renderTasks();return;}

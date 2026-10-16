@@ -21,7 +21,11 @@ def retrieve_context(store, message, history, budget=9000):
         entry=store.get(item['id'])
         if entry.get('deleted_at'):continue
         value={'entry_id':entry['id'],'title':entry['title'],'revision':entry['revision'],'updated_at':entry['updated_at'],
-            'content':entry['content'][:2400], 'sources':[{'title':s['title'],'conversation_id':s['conversation_id']} for s in entry['sources'][:3]]}
+            'content':entry['content'][:2400], 'sources':[{'title':s['title'],
+                'source_type':s.get('source_type','conversation'),
+                'source_url':s.get('source_url',''),
+                'conversation_id':s['conversation_id'] if s.get('source_type','conversation')=='conversation' else None}
+                for s in entry['sources'][:3]]}
         size=len(json.dumps(value,ensure_ascii=False))
         if used+size>budget:continue
         result.append(value);used+=size

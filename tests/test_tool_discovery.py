@@ -132,6 +132,8 @@ class DependencyStatusTests(unittest.TestCase):
             output_dir=Path("/tmp/fixture-summary"),
         ))
         runtime.stop_event = threading.Event()
+        runtime.executor = Mock()
+        runtime.executor.status.return_value = {"limit": 4, "running": 0, "queued": 0}
         runtime.scheduler_owned = True
         runtime.token = "fixture-token"
         tools = {"yt-dlp": "/project/yt-dlp", "ffmpeg": "/package/ffmpeg", "node": "/project/node"}

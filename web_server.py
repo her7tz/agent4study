@@ -876,6 +876,8 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
             self._json(200, {"entries": self.runtime.chat.knowledge.store.search(deleted=True)})
         elif path == "/api/knowledge/ingestions":
             self._json(200, {"jobs": self.runtime.chat.knowledge.jobs()})
+        elif path.startswith("/api/knowledge/ingestions/"):
+            self._json(200, {"job": self.runtime.chat.knowledge.job(path[len("/api/knowledge/ingestions/"):])})
         elif path.startswith("/api/knowledge/"):
             self._json(200, {"entry": self.runtime.chat.knowledge.store.get(path[len("/api/knowledge/"):])})
         elif path.startswith("/api/conversations/"):
@@ -1016,6 +1018,10 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
             self._json(200, self.runtime.chat.archive(path[len("/api/conversations/"):-len("/archive")], body.get("extract_knowledge", False)))
         elif path.startswith("/api/conversations/") and path.endswith("/unarchive"):
             self._json(200, self.runtime.chat.unarchive(path[len("/api/conversations/"):-len("/unarchive")]))
+        elif path == "/api/knowledge/import-share":
+            if not set(body).issubset({"url", "title"}):
+                raise APIError(400, "分享链接请求包含未知字段。")
+            self._json(202, {"job": self.runtime.chat.knowledge.request_share(body.get("url"), body.get("title", ""))})
         elif path.startswith("/api/knowledge-ingestions/") and path.endswith("/retry"):
             self._json(202, {"job": self.runtime.chat.knowledge.retry(path[len("/api/knowledge-ingestions/"):-len("/retry")])})
         elif path.startswith("/api/knowledge/") and path.endswith("/update"):

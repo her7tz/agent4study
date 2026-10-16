@@ -15,12 +15,13 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import urllib.error
 import urllib.request
 import wave
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from model_transport import open_model_response
 
 
 DEFAULT_BASE_URL = "https://api.deepseek.com"
@@ -240,25 +241,12 @@ class DeepSeekClient:
             },
             method="POST",
         )
-        try:
+        if cancellation:
+            cancellation.check()
+        with open_model_response(request, timeout=self.timeout, cancellation=cancellation) as response:
+            payload = json.loads(response.read().decode("utf-8"))
             if cancellation:
                 cancellation.check()
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                from runtime_control import interrupt_socket
-                remove = cancellation.register(lambda: interrupt_socket(response)) if cancellation else lambda: None
-                try:
-                    payload = json.loads(response.read().decode("utf-8"))
-                finally:
-                    remove()
-                if cancellation:
-                    cancellation.check()
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(
-                f"DeepSeek API 返回 HTTP {exc.code}: {detail[:1200]}"
-            ) from exc
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"无法连接 DeepSeek API：{exc.reason}") from exc
         try:
             if payload["choices"][0].get("finish_reason") == "length":
                 raise RuntimeError("模型输出超过长度限制，内容未完整生成，请缩小材料或重试。")
@@ -268,7 +256,6 @@ class DeepSeekClient:
 
     def stream_chat(self, messages, tools=None, on_delta=None, cancellation=None):
         """Assemble SSE deltas, including fragmented function call arguments."""
-        from runtime_control import interrupt_socket
         if not self.settings.api_key:
             raise RuntimeError("请先配置 API Key。")
         if cancellation:
@@ -284,55 +271,48 @@ class DeepSeekClient:
         self.last_reasoning = ""
         finished = False
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                remove = cancellation.register(lambda: interrupt_socket(response)) if cancellation else lambda: None
-                try:
-                    for line in response:
-                        if cancellation:
-                            cancellation.check()
-                        if not line.startswith(b"data:"):
+            with open_model_response(request, timeout=self.timeout, cancellation=cancellation) as response:
+                for line in response:
+                    if cancellation:
+                        cancellation.check()
+                    if not line.startswith(b"data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == b"[DONE]":
+                        finished = True
+                        break
+                    payload = json.loads(data.decode("utf-8"))
+                    if payload.get("error"):
+                        raise RuntimeError("模型流式回复失败：" + str(payload["error"])[:800])
+                    for choice in payload.get("choices", []):
+                        if choice.get("index", 0) != 0:
                             continue
-                        data = line[5:].strip()
-                        if data == b"[DONE]":
+                        if choice.get("finish_reason"):
+                            reason = choice["finish_reason"]
+                            if reason not in {"stop", "tool_calls"}:
+                                raise RuntimeError("模型回复未完成（" + str(reason) + "），请重试或缩小问题。")
                             finished = True
-                            break
-                        payload = json.loads(data.decode("utf-8"))
-                        if payload.get("error"):
-                            raise RuntimeError("模型流式回复失败：" + str(payload["error"])[:800])
-                        for choice in payload.get("choices", []):
-                            if choice.get("index", 0) != 0:
-                                continue
-                            if choice.get("finish_reason"):
-                                reason = choice["finish_reason"]
-                                if reason not in {"stop", "tool_calls"}:
-                                    raise RuntimeError("模型回复未完成（" + str(reason) + "），请重试或缩小问题。")
-                                finished = True
-                            delta = choice.get("delta") or {}
-                            if delta.get("content"):
-                                content.append(delta["content"])
-                                if on_delta:
-                                    on_delta(delta["content"])
-                            if delta.get("reasoning_content"):
-                                reasoning.append(delta["reasoning_content"])
-                                self.last_reasoning = "".join(reasoning)
-                            for call in delta.get("tool_calls") or []:
-                                index = call.get("index", 0)
-                                if not isinstance(index, int) or index < 0 or index >= 12:
-                                    raise RuntimeError("工具调用数量超过限制。")
-                                target = calls.setdefault(index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
-                                if call.get("id"):
-                                    target["id"] += call["id"]
-                                function = call.get("function") or {}
-                                for key in ("name", "arguments"):
-                                    target["function"][key] += function.get(key) or ""
-                finally:
-                    remove()
-        except Exception as exc:
+                        delta = choice.get("delta") or {}
+                        if delta.get("content"):
+                            content.append(delta["content"])
+                            if on_delta:
+                                on_delta(delta["content"])
+                        if delta.get("reasoning_content"):
+                            reasoning.append(delta["reasoning_content"])
+                            self.last_reasoning = "".join(reasoning)
+                        for call in delta.get("tool_calls") or []:
+                            index = call.get("index", 0)
+                            if not isinstance(index, int) or index < 0 or index >= 12:
+                                raise RuntimeError("工具调用数量超过限制。")
+                            target = calls.setdefault(index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                            if call.get("id"):
+                                target["id"] += call["id"]
+                            function = call.get("function") or {}
+                            for key in ("name", "arguments"):
+                                target["function"][key] += function.get(key) or ""
+        except Exception:
             if cancellation:
                 cancellation.check()
-            if isinstance(exc, urllib.error.HTTPError):
-                detail = exc.read(1200).decode("utf-8", errors="replace")
-                raise RuntimeError("DeepSeek API 返回 HTTP {}：{}".format(exc.code, detail)) from exc
             raise
         if cancellation:
             cancellation.check()

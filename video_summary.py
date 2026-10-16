@@ -13,6 +13,7 @@ import signal
 import subprocess
 import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -78,6 +79,7 @@ MAX_FRAMES_PER_SECTION = 2
 CHUNK_CHARS = 12000
 MAX_ANALYSIS_CHARS = 45000
 VIDEO_FORMAT_SELECTOR = "bestvideo[height<=720]/best[height<=720]/bestvideo/best"
+CAPTION_EXTENSIONS = {"vtt", "srt", "json3", "json"}
 
 
 def validate_video_url(url: str) -> str:
@@ -126,7 +128,10 @@ def _run_ytdlp(args: List[str], timeout: int = 1800) -> subprocess.CompletedProc
 
 
 def _get_metadata(url: str) -> Dict[str, Any]:
-    result = _run_ytdlp(["--dump-single-json", "--skip-download", url], timeout=180)
+    result = _run_ytdlp(
+        ["--dump-single-json", "--skip-download", "--ignore-no-formats-error", url],
+        timeout=180,
+    )
     try:
         info = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
@@ -137,6 +142,33 @@ def _get_metadata(url: str) -> Dict[str, Any]:
             raise RuntimeError("链接中没有可处理的视频。")
         info = entries[0]
     return info
+
+
+@contextmanager
+def _ytdlp_source(url: str, folder: Path, info: Optional[Dict[str, Any]]):
+    """Reuse this run's public metadata instead of re-extracting guest streams."""
+    if info is None:
+        yield [url]
+        return
+    metadata_path = None
+    try:
+        # NamedTemporaryFile uses private permissions. A non-JSON suffix keeps
+        # the metadata out of the caption-file glob and the file is never saved.
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=folder,
+            prefix=".media-info-", suffix=".cache", delete=False,
+        ) as metadata_file:
+            metadata_path = Path(metadata_file.name)
+            cached_info = dict(info)
+            # yt-dlp otherwise falls back to webpage_url when loading info fails.
+            # Keep the original metadata and Referer intact; this temporary copy
+            # must fail clearly rather than silently re-extracting guest streams.
+            cached_info.pop("webpage_url", None)
+            json.dump(cached_info, metadata_file, ensure_ascii=False)
+        yield ["--load-info-json", str(metadata_path)]
+    finally:
+        if metadata_path is not None:
+            metadata_path.unlink(missing_ok=True)
 
 
 def _language_rank(language: str, manual: bool) -> Tuple[int, str]:
@@ -156,7 +188,15 @@ def _choose_caption(info: Dict[str, Any]) -> Optional[Tuple[str, bool]]:
         tracks = info.get(key) or {}
         if isinstance(tracks, dict):
             for language, entries in tracks.items():
-                if entries:
+                # Bilibili includes danmaku XML here even when there are no
+                # captions. Viewer comments are not a transcript source.
+                if str(language).lower() in {"danmaku", "live_chat"}:
+                    continue
+                if isinstance(entries, list) and any(
+                    isinstance(entry, dict)
+                    and str(entry.get("ext", "")).lower() in CAPTION_EXTENSIONS
+                    for entry in entries
+                ):
                     rank, normalized = _language_rank(str(language), manual)
                     candidates.append((rank, normalized, str(language), manual))
     if not candidates:
@@ -254,37 +294,49 @@ def _dedupe_segments(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return clean
 
 
-def _download_caption(url: str, language: str, folder: Path) -> Optional[Path]:
+def _download_caption(
+    url: str, language: str, folder: Path, info: Optional[Dict[str, Any]] = None,
+) -> Optional[Path]:
     output_template = str(folder / "%(id)s.%(ext)s")
-    _run_ytdlp(
-        [
-            "--skip-download",
-            "--write-subs",
-            "--write-auto-subs",
-            "--sub-langs",
-            language,
-            "--sub-format",
-            "vtt/best",
-            "-o",
-            output_template,
-            url,
-        ],
-        timeout=300,
-    )
+    with _ytdlp_source(url, folder, info) as source:
+        _run_ytdlp(
+            [
+                "--skip-download",
+                "--ignore-no-formats-error",
+                "--write-subs",
+                "--write-auto-subs",
+                "--sub-langs",
+                language,
+                "--sub-format",
+                "vtt/srt/json3/json",
+                "-o",
+                output_template,
+            ] + source,
+            timeout=300,
+        )
     files = []
-    for pattern in ("*.vtt", "*.srt", "*.json3", "*.json"):
-        files.extend(folder.glob(pattern))
+    for extension in CAPTION_EXTENSIONS:
+        files.extend(folder.glob("*.{}.{}".format(language, extension)))
     if not files:
         return None
     files.sort(key=lambda path: (0 if path.suffix.lower() == ".vtt" else 1, path.name))
     return files[0]
 
 
-def _download_audio(url: str, folder: Path) -> Path:
+def _download_audio(
+    url: str, folder: Path, info: Optional[Dict[str, Any]] = None,
+) -> Path:
+    if info is not None and not info.get("formats"):
+        raise RuntimeError(
+            "平台未提供可下载的音频或视频流，无法使用本地语音转录；"
+            "本次游客读取也没有取得可用平台字幕。"
+        )
     output_template = str(folder / "audio.%(ext)s")
-    _run_ytdlp(
-        ["-f", "bestaudio/best", "-o", output_template, url], timeout=3600
-    )
+    with _ytdlp_source(url, folder, info) as source:
+        _run_ytdlp(
+            ["-f", "bestaudio/best", "-o", output_template] + source,
+            timeout=3600,
+        )
     candidates = [
         path
         for path in folder.glob("audio.*")
@@ -351,7 +403,7 @@ def _get_video_material(
         if progress:
             progress("正在读取平台字幕")
         try:
-            caption_path = _download_caption(url, language, temp_dir)
+            caption_path = _download_caption(url, language, temp_dir, info=info)
             if caption_path:
                 transcript = _parse_caption_file(caption_path)
         except (RuntimeError, ValueError) as exc:
@@ -368,7 +420,7 @@ def _get_video_material(
         raise RuntimeError("没有可用平台字幕；请安装本地语音转录依赖后重试。")
     if progress:
         progress("正在下载可访问的音频")
-    audio_path = _download_audio(url, temp_dir)
+    audio_path = _download_audio(url, temp_dir, info=info)
     if progress:
         progress("正在本地转录音频")
     transcript, language = _transcribe_audio(audio_path)
@@ -554,24 +606,29 @@ Mermaid 只允许 graph/flowchart/mindmap 语法；图中节点和关系必须�
 
 
 def _download_video(
-    url: str, folder: Path, logger: Optional[logging.Logger] = None
+    url: str, folder: Path, logger: Optional[logging.Logger] = None,
+    info: Optional[Dict[str, Any]] = None,
 ) -> Optional[Path]:
     if not resolve_tool("ffmpeg"):
         return None
+    if info is not None and not info.get("formats"):
+        if logger:
+            logger.warning("平台未提供可下载的视频流，跳过关键帧，继续保留文字总结。")
+        return None
     template = str(folder / "video.%(ext)s")
     try:
-        _run_ytdlp(
-            [
-                "-f",
-                VIDEO_FORMAT_SELECTOR,
-                "--max-filesize",
-                "700M",
-                "-o",
-                template,
-                url,
-            ],
-            timeout=3600,
-        )
+        with _ytdlp_source(url, folder, info) as source:
+            _run_ytdlp(
+                [
+                    "-f",
+                    VIDEO_FORMAT_SELECTOR,
+                    "--max-filesize",
+                    "700M",
+                    "-o",
+                    template,
+                ] + source,
+                timeout=3600,
+            )
     except RuntimeError as exc:
         if logger:
             logger.warning("关键帧视频流获取失败，继续保留文字总结：%s", exc)
@@ -791,7 +848,7 @@ def summarize_video(
         if include_frames and total_candidates and resolve_tool("ffmpeg"):
             if progress:
                 progress("正在获取视频关键帧")
-            video_path = _download_video(safe_url, temp_dir, logger)
+            video_path = _download_video(safe_url, temp_dir, logger, info=info)
             if video_path:
                 seen_times = set()
                 for section_index, section in enumerate(plan["sections"]):

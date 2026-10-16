@@ -2,6 +2,8 @@
 
 Search adapters do not need a platform account. Network access is pinned to
 validated public IPs; cookies, local files and private network URLs are excluded.
+An explicit ChatGPT share-host exception can use the user's existing HTTP proxy;
+the proxy resolves that fixed host and TLS still verifies its certificate.
 """
 
 import gzip
@@ -13,6 +15,7 @@ import socket
 import ssl
 import time
 import urllib.parse
+import urllib.request
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 
@@ -20,6 +23,7 @@ from harness import DeepSeekClient, load_skill_instructions
 from runtime_control import CancellationToken, RunCancelled
 
 MAX_RESPONSE = 3 * 1024 * 1024
+SHARE_PROXY_HOSTS = frozenset({"chatgpt.com", "chat.openai.com"})
 
 
 class PublicFetchError(RuntimeError):
@@ -62,15 +66,52 @@ class _PinnedConnection(http.client.HTTPSConnection):
             self.sock = self._context.wrap_socket(self.sock, server_hostname=self.host)
 
 
-def fetch_public(url, cancellation=None, timeout=18, binary=False, max_bytes=MAX_RESPONSE):
+def _share_proxy_connection(parsed, timeout, proxy_hosts):
+    """Use a configured proxy only for explicitly opted-in, fixed share hosts.
+
+    This narrow path intentionally lets the trusted local proxy resolve the share
+    hostname. General research requests retain public-IP validation and pinning.
+    Proxy credentials are unsupported and never copied into error messages.
+    """
+    host = parsed.hostname
+    if (parsed.scheme != "https" or (parsed.port or 443) != 443
+            or host not in SHARE_PROXY_HOSTS or host not in proxy_hosts
+            or not parsed.path.startswith("/share/")):
+        return None
+    proxies = urllib.request.getproxies()
+    value = proxies.get("https") or proxies.get("http")
+    if not value:
+        return None
+    if not isinstance(value, str) or len(value) > 4096 or any(ord(c) < 33 for c in value):
+        raise ValueError("系统代理地址格式无效，请检查代理设置。")
+    try:
+        proxy = urllib.parse.urlsplit(value)
+        proxy_port = 80 if proxy.port is None else proxy.port
+        if (proxy.scheme != "http" or not proxy.hostname or proxy.username is not None
+                or proxy.password is not None or proxy.path not in {"", "/"}
+                or proxy.query or proxy.fragment or not 1 <= proxy_port <= 65535):
+            raise ValueError
+    except ValueError:
+        raise ValueError("分享链接仅支持无凭证的 HTTP 系统代理，请检查代理设置。") from None
+    connection = http.client.HTTPSConnection(proxy.hostname, port=proxy_port,
+        timeout=timeout, context=ssl.create_default_context())
+    connection.set_tunnel(host, 443)
+    return connection
+
+
+def fetch_public(url, cancellation=None, timeout=18, binary=False, max_bytes=MAX_RESPONSE, redirect_validator=None, proxy_hosts=()):
     token = cancellation or CancellationToken()
     for _ in range(5):
         token.check()
         url = public_url(url)
+        if redirect_validator is not None:
+            url = redirect_validator(url)
         parsed = urllib.parse.urlsplit(url)
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        addresses = _addresses(parsed.hostname, port)
-        connection = _PinnedConnection(parsed.hostname, port, addresses[0], parsed.scheme == "https", timeout)
+        connection = _share_proxy_connection(parsed, timeout, proxy_hosts)
+        if connection is None:
+            addresses = _addresses(parsed.hostname, port)
+            connection = _PinnedConnection(parsed.hostname, port, addresses[0], parsed.scheme == "https", timeout)
         def interrupt():
             if connection.sock:
                 try:
