@@ -70,9 +70,9 @@ class SubagentRegistry:
 
 registry=SubagentRegistry()
 from business_harnesses import VideoHarness, PaperHarness
-registry.register(Subagent('video_learning','视频学习 Agent','理解视频内容，组织知识笔记；拥有字幕、转录、画面和总结处理工具。',{'video_summary':VideoHarness},('video-summary',),('video_summary',),'video'))
-registry.register(Subagent('paper_reading','论文阅读 Agent','阅读论文材料，分析问题、贡献、方法、证据与知识；拥有论文处理工具。',{'paper_summary':PaperHarness},('academic-paper-review','paper-summary'),('paper_summary',),'paper'))
-registry.register(Subagent('knowledge_archivist','知识整理 Agent','整理本地归档对话与 ChatGPT 公开分享对话，管理知识证据、个人知识库和归档文档。',{'conversation_knowledge':None},('knowledge-extraction',),('conversation_knowledge',),'archivist',False))
+registry.register(Subagent('video_learning','视频学习 Agent','理解视频内容，组织知识笔记；拥有字幕、转录、画面和总结处理工具。',{'video_summary':VideoHarness},('summary-core','video-summary'),('video_summary',),'video'))
+registry.register(Subagent('paper_reading','论文阅读 Agent','阅读论文材料，分析问题、贡献、方法、证据与知识；拥有论文处理工具。',{'paper_summary':PaperHarness},('summary-core','academic-paper-review','paper-summary'),('paper_summary',),'paper'))
+registry.register(Subagent('knowledge_archivist','知识整理 Agent','整理本地归档对话与 ChatGPT 公开分享对话，管理知识证据、个人知识库和归档文档。',{'conversation_knowledge':None},('summary-core','knowledge-extraction'),('conversation_knowledge',),'archivist',False))
 
 def canonical_role(role):
     if role in {'global','conversation'}:return role

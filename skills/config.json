@@ -2,12 +2,15 @@
   "version": 1,
   "capabilities": {
     "video_summary": [
+      "summary-core",
       "video-summary"
     ],
     "conversation_knowledge": [
+      "summary-core",
       "knowledge-extraction"
     ],
     "paper_summary": [
+      "summary-core",
       "academic-paper-review",
       "paper-summary"
     ],
