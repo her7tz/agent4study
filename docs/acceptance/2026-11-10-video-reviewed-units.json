@@ -1,0 +1,22 @@
+{
+  "date": "2026-11-10",
+  "requirements": ["FR-06", "FR-07"],
+  "regression": {
+    "scenario": "A planning reply cites all reviewed units but reverses the termination condition and invents a new overview.",
+    "baseline_saves_planner_prose": true,
+    "fixed_uses_reviewed_overview_and_body": true,
+    "fixed_preserves_planner_order": true,
+    "section_unit_ids_resolve_to_saved_knowledge_and_source_blocks": true
+  },
+  "public_bilibili_replay": {
+    "url": "https://www.bilibili.com/video/BV1it411g7CX/",
+    "previously_recorded_asr_cues": 184,
+    "resolved_source_blocks": 6,
+    "source_review_calls": 1,
+    "reviewed_units": 6,
+    "actual_subagent_completed": true,
+    "visual_review": "not_requested",
+    "scope": "Previously captured public ASR, real Agent code, synthetic model replies and temporary output. No media or model request during replay."
+  },
+  "tests": {"full_suite_passed": 286, "full_suite_skipped": 0, "video_targeted_passed": 25, "python_3_9_syntax": true}
+}

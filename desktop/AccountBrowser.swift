@@ -104,8 +104,8 @@ final class AccountBrowser: NSObject, WKNavigationDelegate, WKUIDelegate, WKDown
     var window: NSWindow!
     var status = NSTextField(wrappingLabelWithString: "请自行完成登录、验证码或学校认证。")
     var address = NSTextField(labelWithString: "")
-    var pdfURL: URL?
-    var requestedDownload = false
+    private var currentPDF: URL?
+    private var pageGeneration = 0
     var clearing = false
     var downloadFiles: [ObjectIdentifier: URL] = [:]
     var popups: [NSWindow] = []
@@ -149,31 +149,64 @@ final class AccountBrowser: NSObject, WKNavigationDelegate, WKUIDelegate, WKDown
     }
     @objc func clearSession() { manager?.clear(id) }
     @objc func acquirePDF() {
-        if let url = pdfURL { requestedDownload = true; web.load(URLRequest(url: url)); return }
+        guard !clearing else { return }
+        guard !web.isLoading else { status.stringValue = "页面还在加载，请加载完成后再导入。"; return }
+        if let url = currentPDF, let visible = web.url,
+           visible == url || visible.absoluteString.hasPrefix(url.absoluteString + "#") {
+            downloadPDF(url); return
+        }
         guard automatic else { status.stringValue = "请先在网站中打开或下载论文 PDF，再导入。也可将下载的 PDF 附加到对话中的原任务。"; return }
+        let generation = pageGeneration
         let script = "(() => { const m=document.querySelector('meta[name=\"citation_pdf_url\"]'); if(m&&m.content)return new URL(m.content,location.href).href; const a=[...document.querySelectorAll('a[href]')].find(a=>/\\.pdf(?:[?#]|$)|\\/pdf[/?]/i.test(a.href)); return a?a.href:null; })()"
         web.evaluateJavaScript(script) { value, _ in
+            guard !self.clearing, !self.web.isLoading, self.pageGeneration == generation else { return }
             guard let address = value as? String, let url = URL(string: address), Self.allowed(url) else { self.status.stringValue = "没有找到可读取的 PDF 链接，请在网站手动打开 PDF 或上传原文。"; return }
-            self.requestedDownload = true; self.web.load(URLRequest(url: url))
+            self.downloadPDF(url)
         }
+    }
+
+    private func downloadPDF(_ url: URL) {
+        status.stringValue = "正在请求 PDF…"
+        web.startDownload(using: URLRequest(url: url)) { download in download.delegate = self }
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy)->Void) {
         guard let url = navigationAction.request.url, Self.allowed(url) || url.absoluteString == "about:blank" else { decisionHandler(.cancel); return }
-        if navigationAction.shouldPerformDownload { requestedDownload = true; decisionHandler(.download) } else { decisionHandler(.allow) }
+        decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow)
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy)->Void) {
         guard let url = navigationResponse.response.url, Self.allowed(url) else { decisionHandler(.cancel); return }
-        if let response = navigationResponse.response as? HTTPURLResponse, [401,403].contains(response.statusCode) { manager?.state(id,"needs_login"); status.stringValue = "网站要求登录、验证或额外访问权限，请在窗口中处理。" }
-        if navigationResponse.response.mimeType == "application/pdf" {
-            pdfURL = url
-            if requestedDownload { decisionHandler(.download); return }
-            status.stringValue = "当前已打开 PDF。点击“导入当前 PDF”即可继续总结。"
+        if navigationResponse.isForMainFrame, let response = navigationResponse.response as? HTTPURLResponse {
+            if [401, 403].contains(response.statusCode) { showLoginRequired() }
+            if webView === web, (200...299).contains(response.statusCode), response.mimeType == "application/pdf" {
+                currentPDF = url
+                status.stringValue = "当前已打开 PDF。点击导入即可继续总结。"
+            }
         }
         decisionHandler(navigationResponse.canShowMIMEType ? .allow : .cancel)
     }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { address.stringValue = "当前站点：" + (webView.url?.host ?? ""); saveSession() }
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { status.stringValue = "网页未能加载，请重试或手动上传 PDF。" }
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        guard webView === web else { return }
+        pageGeneration += 1
+        if currentPDF != nil { status.stringValue = "请在当前页面选择需要导入的 PDF。" }
+        currentPDF = nil
+    }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if webView === web { address.stringValue = "当前站点：" + (webView.url?.host ?? "") }
+        saveSession()
+    }
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { showNavigationFailure(webView) }
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { showNavigationFailure(webView) }
+
+    private func showNavigationFailure(_ webView: WKWebView) {
+        if webView === web { currentPDF = nil }
+        status.stringValue = "网页未能加载，请重试或手动上传 PDF。"
+    }
+
+    private func showLoginRequired() {
+        manager?.state(id,"needs_login")
+        status.stringValue = "网站要求登录、验证或额外访问权限，请在窗口中处理。"
+    }
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures)->WKWebView? {
         guard let url = navigationAction.request.url, Self.allowed(url) || url.absoluteString == "about:blank" else { return nil }
         let child = WKWebView(frame: .zero, configuration: configuration); child.navigationDelegate = self; child.uiDelegate = self
@@ -182,8 +215,19 @@ final class AccountBrowser: NSObject, WKNavigationDelegate, WKUIDelegate, WKDown
     }
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) { download.delegate = self }
     func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) { download.delegate = self }
+    func download(_ download: WKDownload, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, decisionHandler: @escaping (WKDownload.RedirectPolicy)->Void) {
+        decisionHandler(!clearing && request.url.map(Self.allowed) == true ? .allow : .cancel)
+    }
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String, completionHandler: @escaping(URL?)->Void) {
-        guard response.mimeType == "application/pdf", let root = manager?.dataRoot else { status.stringValue = "未取得 PDF，下载可能是登录或验证页面。"; manager?.state(id,"access_failed"); completionHandler(nil); return }
+        guard !clearing else { completionHandler(nil); return }
+        if let http = response as? HTTPURLResponse, [401, 403].contains(http.statusCode) {
+            showLoginRequired(); completionHandler(nil); return
+        }
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
+              http.url.map(Self.allowed) == true, http.mimeType == "application/pdf", let root = manager?.dataRoot else {
+            status.stringValue = "未取得 PDF，下载可能是登录或验证页面。"
+            manager?.state(id,"access_failed"); completionHandler(nil); return
+        }
         let directory = root.appendingPathComponent("account-downloads", isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: directory,withIntermediateDirectories: true,attributes: [.posixPermissions:0o700])
@@ -191,7 +235,6 @@ final class AccountBrowser: NSObject, WKNavigationDelegate, WKUIDelegate, WKDown
         } catch { status.stringValue = "无法保存下载，请手动上传 PDF。"; completionHandler(nil) }
     }
     func downloadDidFinish(_ download: WKDownload) {
-        requestedDownload = false
         guard let file = downloadFiles.removeValue(forKey: ObjectIdentifier(download)) else { return }
         guard let manager = manager, !clearing else { try? FileManager.default.removeItem(at: file); return }
         do {
@@ -209,7 +252,6 @@ final class AccountBrowser: NSObject, WKNavigationDelegate, WKUIDelegate, WKDown
         } catch { status.stringValue = "PDF 导入失败，请在对话中手动上传。"; manager.state(id,"access_failed") }
     }
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
-        requestedDownload = false
         if let file = downloadFiles.removeValue(forKey: ObjectIdentifier(download)) { try? FileManager.default.removeItem(at: file) }
         if !clearing { status.stringValue = "下载未完成，请确认权限并重试。"; manager?.state(id,"access_failed") }
     }

@@ -1,0 +1,24 @@
+{
+  "date": "2026-11-18",
+  "status": "desktop_download_verified_with_preselected_destination",
+  "scope": "Temporary macOS AppKit/WKWebView client, local HTTP server, real PDF upload and extraction, paper harness, PPTX renderer and download delegate",
+  "fixture": {
+    "pdf": "Synthetic graph traversal document",
+    "model": "Deterministic responses for coordinator, summary and English presentation plan",
+    "submitted_options": {"include_presentation": true, "presentation_minutes": 15, "presentation_language": "en"},
+    "save_destination": "Supplied to the native save callback by the test, in a temporary directory",
+    "external_model_calls": 0
+  },
+  "verified": {
+    "desktop_form_options_hidden_until_selected": true,
+    "desktop_pdf_submitted_and_preserved": true,
+    "generated_deck_contains_editable_english_text_and_diagram_labels": true,
+    "desktop_report_link_requested_pptx": true,
+    "native_download_matches_generated_file": true,
+    "download_sha256": "c67889903d059c2b0cc2586f61a0c31c512e023d12b1ef11440927a3da0e0e62",
+    "wps_process_opened_downloaded_file": true,
+    "wps_slide_rendering_or_editing_verified": false,
+    "manual_save_panel_interaction_verified": false
+  },
+  "regression": {"python_tests": 382, "failures": 0, "skipped": 0, "includes_local_http": true}
+}

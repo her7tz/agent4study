@@ -1,0 +1,19 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>个人 QQ 消息工作区</title>
+<style>body{max-width:52rem;margin:2rem auto;padding:0 1rem;font:16px/1.6 system-ui;color:#17251f}section{padding:1rem;border:1px solid #afbbb1;border-radius:8px;margin:1rem 0}label{display:block;margin:.5rem 0}button,input,select,textarea{font:inherit;padding:.3rem}button{margin:.25rem}textarea,select{max-width:100%}pre,#report{white-space:pre-wrap;overflow-wrap:anywhere}dialog{max-width:min(36rem,90vw)}[role=status]{font-weight:bold}</style>
+<a href="/#settings">返回工作台设置</a><h1>个人 QQ 消息工作区</h1>
+<p>先在本机桥接服务登录个人 QQ，启用带访问令牌的 OneBot 11 HTTP 接口，并将监听地址设为 127.0.0.1。</p>
+<section><h2>连接本机 QQ</h2><label>桥接类型 <select id="bridge-kind"><option value="napcat">NapCat / LLBot</option><option value="icqq">ICQQ OneBot（试用）</option></select></label><label>本机端口 <input id="port" type="number" min="1" max="65535" value="3000"></label><label>桥接服务访问令牌 <input type="password" id="secret" autocomplete="off"></label><label>要连接的 QQ 号（选填） <input id="expected-account" type="text" inputmode="numeric" autocomplete="off" aria-describedby="expected-account-help"></label><p id="expected-account-help">填写后，工作台会先核对桥接登录的 QQ 号。</p>
+<label><input type="checkbox" id="test-mode" aria-controls="test-fields"> 指定一个会话做只读联调</label>
+<div id="test-fields" hidden>
+<p>填写上方的预期 QQ 号和下方的测试会话编号。连接后只能读取指定会话，不能提交回复。</p>
+<label>测试会话类型 <select id="test-kind"><option value="group">群聊</option><option value="friend">好友</option></select></label>
+<label>测试群号或好友 QQ 号 <input id="test-peer" type="text" inputmode="numeric" maxlength="20" autocomplete="off"></label>
+</div>
+<button id="connect">连接 QQ</button><button id="stop" hidden>断开</button><p id="account"></p></section>
+<section id="workspace" hidden><h2>阅读范围</h2><p id="peer-availability"></p><p id="history-support"></p><label>好友或群聊 <select id="peer" aria-describedby="peer-availability history-support history-state"></select></label><label>开始 <input id="start" type="datetime-local"></label><label>结束 <input id="end" type="datetime-local"></label><button id="read">读取所选会话</button>
+<p id="history-state"></p>
+<div id="unread-controls" hidden><button id="read-unread">读取 QQ 平台未读</button><p>未读读取适用于群聊，需桥接提供平台未读快照扩展。现有普通 OneBot 接口可按日期查询历史。</p></div>
+<p>读取文字和对自己的 @。历史按所选时间读取，每次最多 10 页，<span id="page-size"></span>。</p>
+<div id="material" hidden><label>原消息 <select id="message"></select></label><pre id="source"></pre><p>点击下列模型操作，将相应消息资料提交给主 Agent 配置的模型服务。不会加入个人知识库。</p><button id="summary">总结本次读取的消息</button><div id="report"></div><div id="qq-references" hidden><h3>摘要引用</h3><div id="qq-reference-list"></div></div><button id="suggest">为所选消息拟回复</button><label>回复草稿<br><textarea id="reply" rows="4" cols="64" maxlength="4000"></textarea></label><button id="preview">预览发送</button></div></section>
+<p id="notice" role="status"></p><dialog id="confirmBox"><h2>确认发送这条 QQ 消息？</h2><pre id="confirmText"></pre><button id="cancel">取消</button><button id="send">确认发送</button></dialog>
+<script src="/qq.js"></script></html>

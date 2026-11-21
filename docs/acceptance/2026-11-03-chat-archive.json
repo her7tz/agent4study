@@ -1,0 +1,10 @@
+{
+  "status": "passed",
+  "source": "two synthetic local messages",
+  "model": "deepseek-flash",
+  "document_count": 1,
+  "knowledge_entries": 1,
+  "all_points_in_document": true,
+  "source_message_ids_checked": true,
+  "unarchived_messages": 2
+}

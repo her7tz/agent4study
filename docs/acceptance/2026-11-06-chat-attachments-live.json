@@ -1,0 +1,64 @@
+{
+  "scope": "loopback HTTP; fresh temporary database and copied synthetic public reports",
+  "model_calls": 0,
+  "original_outputs_modified": false,
+  "reports": [
+    {
+      "source_file": "paper_summary/paper_summary_20261106-142334_399a7d6d.md",
+      "resources": [
+        {
+          "url": "/outputs/paper_summary/paper_summary_20261106-142334_399a7d6d_assets/source-evidence.json",
+          "status": 200,
+          "bytes": 5043,
+          "sha256": "d116eb76179b6cb8f1e7645f85e160d8ccd798ba170222a3e892f151620cef13",
+          "content_type": "application/json",
+          "bytes_match": true
+        },
+        {
+          "url": "/outputs/paper_summary/paper_summary_20261106-142334_399a7d6d_assets/http-fixture.png",
+          "status": 200,
+          "bytes": 422,
+          "sha256": "d07bf81ac79e2e486e8ab731ba8914288b545928dc23852a0172b890290d562b",
+          "content_type": "image/png",
+          "bytes_match": true
+        }
+      ]
+    },
+    {
+      "source_file": "paper_summary/paper_summary_20261106-142329_af788cc8.md",
+      "resources": [
+        {
+          "url": "/outputs/paper_summary/paper_summary_20261106-142329_af788cc8_assets/source-evidence.json",
+          "status": 200,
+          "bytes": 6025,
+          "sha256": "5b579e7abf81a1f31f5190ff6fa40d064cd7ab4b9d397164ded346c39121f929",
+          "content_type": "application/json",
+          "bytes_match": true
+        },
+        {
+          "url": "/outputs/paper_summary/paper_summary_20261106-142329_af788cc8_assets/http-fixture.png",
+          "status": 200,
+          "bytes": 422,
+          "sha256": "d07bf81ac79e2e486e8ab731ba8914288b545928dc23852a0172b890290d562b",
+          "content_type": "image/png",
+          "bytes_match": true
+        }
+      ]
+    }
+  ],
+  "limitation": "JSON response bytes and MIME passed over HTTP. Root confirmed both images decoded and displayed in the browser. Browser JSON presentation after a click remains unverified because CUA timed out.",
+  "status": "passed",
+  "browser_entry_url": "http://127.0.0.1:55674/",
+  "conversation_id": "4311eedd2cd54f58b705d19588e3336a",
+  "fixture_png_dimensions": "160 x 80",
+  "temporary_server_and_data_closed": true,
+  "terminal_exit_code": 0,
+  "browser_observation_reported_by_root": {
+    "images_checked": 2,
+    "complete": true,
+    "natural_width": 160,
+    "natural_height": 80,
+    "visible_green_yellow_fixture": true,
+    "json_click_presentation": "unverified after CUA timeout"
+  }
+}

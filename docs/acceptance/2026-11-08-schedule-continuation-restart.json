@@ -1,0 +1,26 @@
+{
+  "status": "passed",
+  "date": "2026-11-08",
+  "scope": "FR-13/14 web-owned scheduled IEEE paper continuation across abrupt OS process exit",
+  "normal_surfaces": [
+    "web application scheduler",
+    "loopback task/schedule APIs",
+    "PDF upload/resume",
+    "run cancellation"
+  ],
+  "fixtures": "synthetic PDF; local parse is real; external DNS resolution, model and notifications replaced; controlled worker waits after parse",
+  "first_pid": 76784,
+  "first_exit": -9,
+  "restarted_pid": 76786,
+  "states": [
+    "waiting_user",
+    "running",
+    "interrupted",
+    "running",
+    "cancelled"
+  ],
+  "same_task_and_scheduled_run": true,
+  "no_replay_before_explicit_resume": true,
+  "one_shot_stayed_disabled": true,
+  "artifacts_published": 0
+}

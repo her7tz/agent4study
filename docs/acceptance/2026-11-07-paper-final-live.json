@@ -1,0 +1,204 @@
+{
+  "date": "2026-11-07",
+  "status": "pipeline_passed_predeclared_quality_not_accepted",
+  "scope": "FR-06/FR-08 full unchanged public Transformer PDF through PaperUploads and normal paper_summary capability",
+  "source_kind": "locally_preserved_full_public_pdf",
+  "original_sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+  "input_pages": 15,
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "effective_rule_sha256": "8115fe4e522f5eb29c95946fb6499877202619976c77e1eae051c87fba8109fa",
+  "rules_modified": false,
+  "custom_task_prompt": false,
+  "private_knowledge_or_study_log_used": false,
+  "predeclared_review": [
+    {
+      "id": "N_only",
+      "criterion": "Table 3 N=2/4/6/8 rows inherit the base configuration except N; preserve PPL/BLEU pairs 6.11/23.7, 5.19/25.3, 4.92/25.8, 4.88/25.5. Lower PPL is better; higher BLEU is better. N=8 improves PPL but lowers BLEU relative to N=6; do not attach a blanket multifactor warning to N-only rows."
+    },
+    {
+      "id": "big",
+      "criterion": "The big row changes model width, feed-forward width, heads, dropout and training steps; do not attribute its result to a single changed variable."
+    },
+    {
+      "id": "experiment_scope",
+      "criterion": "Table 3 numbers are English-to-German newstest2013 development results and per-wordpiece PPL, distinct from newstest2014 test results and per-word perplexity."
+    },
+    {
+      "id": "table_source",
+      "criterion": "The final report links the relevant knowledge unit to original physical PDF page 9 for Table 3."
+    },
+    {
+      "id": "prior_qualifier",
+      "criterion": "The unscaled qualifier belongs to dot-product attention rather than additive attention."
+    },
+    {
+      "id": "prior_position_pages",
+      "criterion": "Positional encoding method comes from physical page 6; learned-position ablation values come from physical page 9; paragraph support preserves both when both are discussed."
+    },
+    {
+      "id": "prior_attention_pages",
+      "criterion": "The three Transformer attention applications retain physical page 5 support for their detailed description, rather than citing physical page 3 alone."
+    },
+    {
+      "id": "prior_prose_and_limits",
+      "criterion": "Do not expose internal material chunk-completion narration; preserve the source conflict of 41.8 versus 41.0 when discussing it; distinguish figures/captions and extracted text from unperformed visual analysis."
+    }
+  ],
+  "pipeline": {
+    "status": "passed",
+    "seconds": 242.0,
+    "pages": 15,
+    "summary_processing": {
+      "version": 1,
+      "source_blocks": 15,
+      "source_characters": 45798,
+      "chunks": 3,
+      "merge_passes": 1,
+      "model_calls": 4,
+      "all_chunks_processed": true,
+      "checks": "structure_source_ids_and_declared_coverage_only",
+      "rendered_units": 14,
+      "rendering_check": "inline_and_declared_unit_ids"
+    },
+    "subagent": {
+      "role": "paper_reading",
+      "operation": "paper_summary",
+      "run_id": "888184271e544a49b4056bd62a1a5db1",
+      "verified": true
+    },
+    "zip_preserves_original_markdown_and_evidence": true,
+    "reported_scope": "已读取 PDF 的可提取文字；旋转文字的排版与阅读顺序可能不准确。图像、公式及复杂表格未做视觉识别。"
+  },
+  "quality_review": {
+    "status": "not_accepted",
+    "method": "Manual comparison of the complete final report and saved knowledge units with the same unchanged original PDF and reader source blocks; original physical pages 4, 5, 6, 8 and 9 were also rendered and visually inspected. No model self-score and no revised prompt or rule.",
+    "checks": [
+      {
+        "id": "N_only",
+        "result": "partial_not_accepted",
+        "unit": "k10",
+        "report_lines": [
+          95,
+          101
+        ],
+        "evidence": "Base N=6 4.92/25.8 and N=8 4.88/25.5 are preserved, with correct opposing PPL/BLEU quality directions and no blanket multifactor warning. N=2 and N=4 rows and their 6.11/23.7 and 5.19/25.3 values are absent, so the complete predeclared N-only check is not satisfied."
+      },
+      {
+        "id": "big",
+        "result": "passed_with_qualification",
+        "unit": "k10",
+        "report_lines": [
+          105,
+          157
+        ],
+        "evidence": "The report lists the changed width, feed-forward width, heads, dropout and training steps with 4.33/26.4. It does not claim a single causal factor; a separate explicit confounding sentence is not supplied."
+      },
+      {
+        "id": "experiment_scope",
+        "result": "passed",
+        "unit": "k10",
+        "report_lines": [
+          83,
+          95
+        ],
+        "evidence": "English-to-German newstest2013 development scope and per-wordpiece PPL are explicit, and newstest2014 test results appear in their separate Table 2 section."
+      },
+      {
+        "id": "table_source",
+        "result": "passed",
+        "unit": "k10",
+        "report_lines": [
+          95,
+          101,
+          105
+        ],
+        "evidence": "The Table 3 unit points to reader sources paper-page-8 and paper-page-9; final references include physical page 9, where Table 3 actually appears."
+      },
+      {
+        "id": "prior_qualifier",
+        "result": "failed_regression",
+        "unit": "k3",
+        "report_lines": [
+          29
+        ],
+        "source_physical_pages": [
+          4
+        ],
+        "evidence": "The report again attaches the unscaled qualifier to additive attention. The original states that additive attention outperforms dot-product attention without scaling for larger key dimensions. The same wrong comparison is already present in saved knowledge unit k3."
+      },
+      {
+        "id": "prior_position_pages",
+        "result": "passed",
+        "unit": "k6",
+        "report_lines": [
+          62,
+          64,
+          66
+        ],
+        "evidence": "The method and learned-position comparison cite reader-established physical pages 6 and 9, preserving both the method and Table 3 experimental support."
+      },
+      {
+        "id": "prior_attention_pages",
+        "result": "passed",
+        "unit": "k3",
+        "report_lines": [
+          33
+        ],
+        "evidence": "The detailed three applications cite physical pages 3, 4 and 5; page 5 contains the actual three-way description."
+      },
+      {
+        "id": "prior_prose_and_limits",
+        "result": "passed_for_stated_checks",
+        "units": [
+          "k9",
+          "k13"
+        ],
+        "report_lines": [
+          87,
+          126,
+          132
+        ],
+        "evidence": "No source-chunk completion narration appears in the finished knowledge prose; 41.0 versus 41.8 is retained as a source conflict, and appendix figure captions are distinguished from unperformed image verification."
+      }
+    ],
+    "additional_observed_issues": [
+      {
+        "id": "table_B_value_dimension",
+        "unit": "k10",
+        "report_lines": [
+          100
+        ],
+        "source_physical_pages": [
+          9
+        ],
+        "finding": "The report changes both d_k and d_v to 16/32 for Table 3 row B. The original changes d_k only; the d_v column is blank and the caption requires it to inherit base d_v=64. This is a concrete table-column/parameter-inheritance error in both the saved knowledge unit and final prose."
+      },
+      {
+        "id": "appendix_scope_conflict",
+        "unit": "k5",
+        "report_lines": [
+          58,
+          126
+        ],
+        "source_physical_pages": [
+          7,
+          13,
+          14,
+          15
+        ],
+        "finding": "The complexity section says the material does not include the appendix, while the same complete input and final appendix-caption section include physical pages 13-15. The valid limitation is that images were not visually interpreted; appendix text was supplied."
+      }
+    ],
+    "conclusion": "The normal full-PDF pipeline, citation mapping and archive bytes passed. The predeclared semantic review did not pass: the N-only check is incomplete and the earlier comparison-qualifier error recurred. The additional observed table-B and appendix-scope errors remain recorded without editing the generated report.",
+    "limitations": [
+      "This is one full-paper execution with frozen rules and no custom task prompt. It does not establish universal factual accuracy or a broad benchmark.",
+      "The manual review covers the predeclared checks and the concrete additional errors found in the same inspected passages, not every statement in the full report.",
+      "Visual inspection was performed by the acceptance reviewer on the original PDF; the application model still used extracted text only.",
+      "No production code, Skill, private data, source PDF or generated report was changed, and no second model run was made."
+    ]
+  },
+  "report": ".local/acceptance/paper-final-20261107/paper_summary/paper_summary_20261107-065916_88818427.md",
+  "report_sha256": "4188963a49796b4fc7a10b22686a80969f49496fb1182a5d16a2137d092162f8",
+  "initial_pipeline_status": "pipeline_passed_quality_review_pending"
+}

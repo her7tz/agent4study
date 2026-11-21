@@ -44,7 +44,7 @@ private enum DesktopError: LocalizedError {
 }
 
 private enum ProbeResult {
-    case ready
+    case ready(session: String, processID: Int32?)
     case unavailable
     case failure(String)
 }
@@ -83,6 +83,8 @@ private final class AgentDesktop: NSObject, NSApplicationDelegate, NSWindowDeleg
     private var connectionGeneration = 0
     private var startupDeadline: Date?
     private var hasLoadedPage = false
+    private var workspaceSession: String?
+    private var backendRecovery = BackendRecovery()
     private var quitting = false
     private var downloads: [ObjectIdentifier: DownloadRecord] = [:]
     private var destinationRequests: [DownloadDestinationRequest] = []
@@ -271,12 +273,17 @@ private final class AgentDesktop: NSObject, NSApplicationDelegate, NSWindowDeleg
             do { configuration = try DesktopConfiguration.load() }
             catch { showConnectionFailure(error.localizedDescription); return }
         }
+        beginConnection("正在连接本地工作空间…", detail: "关闭窗口后，Agent 与定时任务会继续在后台运行。")
+    }
+
+    private func beginConnection(_ title: String, detail: String) {
         pollingTimer?.invalidate()
+        pollingTimer = nil
         connectionGeneration += 1
         probeInFlight = false
         startupDeadline = nil
-        showConnecting("正在连接本地工作空间…", detail: "关闭窗口后，Agent 与定时任务会继续在后台运行。")
-        probe(allowLaunch: backend == nil || !(backend?.isRunning ?? false))
+        showConnecting(title, detail: detail)
+        probe(allowLaunch: backend == nil)
     }
 
     private func showConnecting(_ title: String, detail: String) {
@@ -288,7 +295,7 @@ private final class AgentDesktop: NSObject, NSApplicationDelegate, NSWindowDeleg
         statusItem.button?.toolTip = "Agent 工作台 · 正在连接"
     }
 
-    private func showConnectionFailure(_ message: String) {
+    private func showConnectionFailure(_ message: String, keepChecking: Bool = false) {
         pollingTimer?.invalidate()
         pollingTimer = nil
         overlay.isHidden = false
@@ -297,6 +304,7 @@ private final class AgentDesktop: NSObject, NSApplicationDelegate, NSWindowDeleg
         messageLabel.stringValue = message
         retryButton.isHidden = false
         statusItem.button?.toolTip = "Agent 工作台 · 连接异常"
+        if keepChecking { startPolling(interval: 10) }
     }
 
     private func probe(allowLaunch: Bool = false) {
@@ -317,10 +325,22 @@ private final class AgentDesktop: NSObject, NSApplicationDelegate, NSWindowDeleg
             } else if let http = response as? HTTPURLResponse, http.statusCode == 200,
                       let data = data,
                       let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let output = payload["output_dir"] as? String {
-                let actual = URL(fileURLWithPath: output).standardizedFileURL.resolvingSymlinksInPath()
-                let expected = config.output.standardizedFileURL.resolvingSymlinksInPath()
-                result = actual == expected ? .ready : .failure("端口 \(config.port) 正在运行其他工作空间。请先退出其他工作空间的服务，再重新连接。")
+                      let output = payload["output_dir"] as? String,
+                      let session = payload["csrf_token"] as? String {
+                let actualOutput = URL(fileURLWithPath: output).standardizedFileURL.resolvingSymlinksInPath()
+                let expectedOutput = config.output.standardizedFileURL.resolvingSymlinksInPath()
+                let wrongWorkspace = "端口 \(config.port) 正在运行其他工作空间。请先退出其他工作空间的服务，再重新连接。"
+                if actualOutput != expectedOutput {
+                    result = .failure(wrongWorkspace)
+                } else if let dataDirectory = payload["data_dir"] as? String, dataDirectory.hasPrefix("/") {
+                    // A shared output library does not identify the database that owns its tasks and conversations.
+                    let actualData = URL(fileURLWithPath: dataDirectory).standardizedFileURL.resolvingSymlinksInPath()
+                    let expectedData = config.data.standardizedFileURL.resolvingSymlinksInPath()
+                    let processID = (payload["process_id"] as? NSNumber)?.int32Value
+                    result = actualData == expectedData ? .ready(session: session, processID: processID) : .failure(wrongWorkspace)
+                } else {
+                    result = .failure("本地 Agent 服务缺少工作空间校验信息。请重启该服务后再连接。")
+                }
             } else {
                 result = .failure("端口 \(config.port) 的服务不是当前 Agent 工作空间。请检查正在运行的本地服务。")
             }
@@ -333,8 +353,14 @@ private final class AgentDesktop: NSObject, NSApplicationDelegate, NSWindowDeleg
     }
 
     private func handleProbe(_ result: ProbeResult, allowLaunch: Bool) {
+        let keepChecking = BackendRecovery.shouldKeepChecking(ownedProcessRunning: backend?.isRunning,
+                                                              hasConnected: workspaceSession != nil)
         switch result {
-        case .ready:
+        case .ready(let session, let processID):
+            let ownedProcessID = backend?.isRunning == true ? backend?.processIdentifier : nil
+            backendRecovery.observedReady(processID: processID, ownedProcessID: ownedProcessID)
+            let reconnected = !overlay.isHidden || workspaceSession != session
+            workspaceSession = session
             startupDeadline = nil
             overlay.isHidden = true
             spinner.stopAnimation(nil)
@@ -342,6 +368,8 @@ private final class AgentDesktop: NSObject, NSApplicationDelegate, NSWindowDeleg
             if !hasLoadedPage {
                 hasLoadedPage = true
                 webView.load(URLRequest(url: configuration!.home))
+            } else if reconnected, let url = webView.url, isWorkspaceURL(url) {
+                webView.evaluateJavaScript("window.dispatchEvent(new Event('agent-workspace-reconnected'))", completionHandler: nil)
             }
             startPolling(interval: 10)
         case .unavailable:
@@ -350,6 +378,10 @@ private final class AgentDesktop: NSObject, NSApplicationDelegate, NSWindowDeleg
             } else if let deadline = startupDeadline, Date() < deadline,
                       backend?.isRunning == true {
                 startPolling(interval: 1)
+            } else if backend?.isRunning == true {
+                showConnectionFailure("本地服务进程仍在运行，但尚未就绪。将继续检查连接，也可点击重新连接；启动详情记录在工作空间的 .local/desktop-backend.log。", keepChecking: true)
+            } else if keepChecking {
+                showConnectionFailure("本地服务暂时不可用。工作台会继续检查连接，也可点击重新连接。", keepChecking: true)
             } else {
                 showConnectionFailure("本地服务已停止。点击重新连接可重新启动；详细信息记录在工作空间的 .local/desktop-backend.log。")
             }
@@ -357,7 +389,7 @@ private final class AgentDesktop: NSObject, NSApplicationDelegate, NSWindowDeleg
             if let deadline = startupDeadline, Date() < deadline, backend?.isRunning == true {
                 startPolling(interval: 2)
             } else {
-                showConnectionFailure(message)
+                showConnectionFailure(message, keepChecking: keepChecking)
             }
         }
     }
@@ -371,7 +403,7 @@ private final class AgentDesktop: NSObject, NSApplicationDelegate, NSWindowDeleg
     }
 
     private func startBackend() {
-        guard let config = configuration, !quitting else { return }
+        guard let config = configuration, backend == nil, !quitting else { return }
         showConnecting("正在启动本地 Agent…", detail: "任务与结果保存在这个工作空间。首次连接可能需要稍等片刻。")
         let process = Process()
         process.executableURL = config.python
@@ -387,14 +419,20 @@ private final class AgentDesktop: NSObject, NSApplicationDelegate, NSWindowDeleg
                                environment["PATH"] ?? ""].joined(separator: ":")
         process.environment = environment
         process.standardInput = FileHandle.nullDevice
-        let generation = connectionGeneration
         backend = process
         process.terminationHandler = { [weak self] terminated in
             DispatchQueue.main.async {
                 guard let self = self, self.backend === terminated else { return }
                 self.backendLog?.closeFile()
                 self.backendLog = nil
-                if !self.quitting {
+                self.backend = nil
+                guard !self.quitting else { return }
+                if self.backendRecovery.shouldRestart(afterExit: terminated.processIdentifier, uptime: ProcessInfo.processInfo.systemUptime) {
+                    self.beginConnection("本地服务已退出，正在重新连接…", detail: "会保留当前工作台页面，服务就绪后同步任务和对话。")
+                } else {
+                    self.connectionGeneration += 1
+                    self.probeInFlight = false
+                    self.startupDeadline = nil
                     self.showConnectionFailure("本地服务已退出。点击重新连接可再次启动；详细信息记录在 .local/desktop-backend.log。")
                 }
             }
@@ -417,19 +455,19 @@ private final class AgentDesktop: NSObject, NSApplicationDelegate, NSWindowDeleg
                 do { try process.run() }
                 catch { try? handle.close(); throw error }
                 DispatchQueue.main.async {
-                    guard let self = self else { process.interrupt(); return }
-                    self.backendLog = handle
-                    guard !self.quitting, self.connectionGeneration == generation else {
+                    guard let self = self, self.backend === process, !self.quitting else {
+                        try? handle.close()
                         if process.isRunning { process.interrupt() }
                         return
                     }
+                    self.backendLog = handle
                     self.startupDeadline = Date().addingTimeInterval(45)
                     self.startPolling(interval: 1)
                     self.probe()
                 }
             } catch {
                 DispatchQueue.main.async {
-                    guard let self = self, self.connectionGeneration == generation, !self.quitting else { return }
+                    guard let self = self, self.backend === process, !self.quitting else { return }
                     self.backend = nil
                     self.showConnectionFailure("无法启动本地服务：\(error.localizedDescription)")
                 }

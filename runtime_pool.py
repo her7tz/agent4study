@@ -10,10 +10,17 @@ class ParallelDaemonExecutor(Executor):
         for thread in self._threads:thread.start()
     def submit(self,fn,*args,**kwargs):
         future=Future()
+        self._enqueue([(future,fn,args,kwargs)])
+        return future
+    def submit_many(self,fn,arguments):
+        entries=[(Future(),fn,args,{}) for args in arguments]
+        self._enqueue(entries)
+        return [entry[0] for entry in entries]
+    def _enqueue(self,entries):
         with self._lock:
             if self._closed:raise RuntimeError('本地服务正在关闭。')
-            self._queue.put((future,fn,args,kwargs))
-        return future
+            for entry in entries:
+                self._queue.put(entry)
     def _work(self):
         while True:
             item=self._queue.get()

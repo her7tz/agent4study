@@ -15,17 +15,20 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import traceback
 import urllib.request
 import wave
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from model_transport import open_model_response
+from model_client import ModelJSONError
+from model_transport import ModelTransportError, open_model_response
 
 
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_MODEL = "deepseek-flash"
+MODEL_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}")
 DEFAULT_DATA_HOME = Path.home() / ".minimal-agent"
 PROJECT_DIR = Path(__file__).resolve().parent
 SKILLS_DIR = PROJECT_DIR / "skills"
@@ -213,6 +216,29 @@ class DeepSeekClient:
         self.settings = settings
         self.timeout = timeout
 
+    def list_models(self) -> List[str]:
+        if not self.settings.api_key:
+            raise RuntimeError("请先保存 API Key，再查询可用模型。")
+        request = urllib.request.Request(
+            f"{self.settings.base_url}/models",
+            headers={"Authorization": f"Bearer {self.settings.api_key}", "Accept": "application/json"},
+            method="GET",
+        )
+        limit = 1024 * 1024
+        with open_model_response(request, timeout=self.timeout) as response:
+            raw = response.read(limit + 1)
+        if len(raw) > limit:
+            raise RuntimeError("DeepSeek 模型列表超过响应大小限制。")
+        try:
+            data = json.loads(raw)["data"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("DeepSeek 返回了无法识别的模型列表。") from exc
+        if not isinstance(data, list):
+            raise RuntimeError("DeepSeek 返回了无法识别的模型列表。")
+        ids = [item.get("id") for item in data if isinstance(item, dict)]
+        return list(dict.fromkeys(model for model in ids
+                                  if isinstance(model, str) and MODEL_ID_PATTERN.fullmatch(model)))
+
     def chat(
         self,
         messages: List[Dict[str, Any]],
@@ -317,7 +343,8 @@ class DeepSeekClient:
         if cancellation:
             cancellation.check()
         if not finished:
-            raise RuntimeError("模型连接提前断开，回复未完成。")
+            raise ModelTransportError("模型连接提前断开，回复未完成。请求已发送，未自动重发，可手动重试。",
+                                      "response_body", request_started=True)
         result = {"role": "assistant", "content": "".join(content)}
         if reasoning:
             result["reasoning_content"] = "".join(reasoning)
@@ -339,48 +366,89 @@ class DeepSeekClient:
         )
         content = reply.get("content")
         if not isinstance(content, str) or not content.strip():
-            raise RuntimeError("模型没有返回 JSON 内容。")
+            raise ModelJSONError("模型没有返回 JSON 内容。")
         try:
             result = json.loads(content)
         except json.JSONDecodeError as exc:
-            raise RuntimeError(f"模型返回的 JSON 无法解析：{exc}") from exc
+            raise ModelJSONError(f"模型返回的 JSON 无法解析：{exc}") from exc
         if not isinstance(result, dict):
-            raise RuntimeError("模型返回的 JSON 顶层必须是对象。")
+            raise ModelJSONError("模型返回的 JSON 顶层必须是对象。")
         return result
+
+
+def secret_pattern(secrets):
+    values = [secrets] if isinstance(secrets, str) else secrets or ()
+    # A shorter key can be a prefix of a longer role-specific key.
+    keys = sorted({value for value in values if value}, key=len, reverse=True)
+    return re.compile("|".join(map(re.escape, keys))) if keys else None
+
+
+class SecretSafeLogger:
+    """Avoid exposing secrets even if an upstream error includes credentials."""
+
+    def __init__(self, logger: Any, secret: Any):
+        self.logger = logger
+        self.pattern = secret_pattern(secret)
+
+    def clean(self, value: Any) -> str:
+        text = str(value)
+        return self.pattern.sub("[已隐藏]", text) if self.pattern else text
+
+    def _log(self, level: int, message: Any, *args: Any, **kwargs: Any) -> None:
+        try:
+            text = str(message) % args if args else str(message)
+        except (TypeError, ValueError):
+            text = str(message)
+        kwargs.pop("exc_info", None)
+        self.logger.log(level, self.clean(text), **kwargs)
+
+    def debug(self, message: Any, *args: Any, **kwargs: Any) -> None:
+        self._log(logging.DEBUG, message, *args, **kwargs)
+
+    def info(self, message: Any, *args: Any, **kwargs: Any) -> None:
+        self._log(logging.INFO, message, *args, **kwargs)
+
+    def warning(self, message: Any, *args: Any, **kwargs: Any) -> None:
+        self._log(logging.WARNING, message, *args, **kwargs)
+
+    def error(self, message: Any, *args: Any, **kwargs: Any) -> None:
+        self._log(logging.ERROR, message, *args, **kwargs)
+
+    def exception(self, message: Any, *args: Any, **kwargs: Any) -> None:
+        self.error(message, *args, **kwargs)
+        error = sys.exc_info()[1]
+        if error is not None:
+            # Format first, then redact; standard exc_info would bypass cleaning.
+            self.error("失败堆栈：\n%s", "".join(traceback.format_exception(
+                type(error), error, error.__traceback__
+            )))
 
 
 def notify_local(title: str, message: str, logger: Optional[logging.Logger] = None) -> None:
     """Show an OS notification when available; logging remains the durable record."""
     if logger:
-        logger.info("本地通知：%s — %s", title, message)
+        logger.info("尝试本地通知：%s — %s", title, message)
     try:
         if platform.system() == "Darwin" and shutil.which("osascript"):
             safe_title = title.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
             safe_message = message.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
-            subprocess.run(
-                [
-                    "osascript",
-                    "-e",
-                    'display notification "{}" with title "{}"'.format(
-                        safe_message, safe_title
-                    ),
-                ],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=10,
-            )
+            command = ["osascript", "-e", 'display notification "{}" with title "{}"'.format(safe_message, safe_title)]
         elif platform.system() == "Linux" and shutil.which("notify-send"):
-            subprocess.run(
-                ["notify-send", title, message],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=10,
-            )
-    except (OSError, subprocess.SubprocessError):
+            command = ["notify-send", title, message]
+        else:
+            if logger:
+                logger.warning("当前环境没有可用的本地通知工具：%s", title)
+            return
+        result = subprocess.run(command, check=False, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, timeout=10)
+        if result.returncode and logger:
+            logger.warning("本地通知命令未成功（退出码 %s）：%s", result.returncode, title)
+    except subprocess.TimeoutExpired:
         if logger:
-            logger.exception("显示本地通知失败")
+            logger.warning("本地通知命令超时：%s", title)
+    except (OSError, subprocess.SubprocessError) as exc:
+        if logger:
+            logger.warning("无法运行本地通知命令（%s）：%s", type(exc).__name__, title)
 
 
 class JobStore:
@@ -427,6 +495,8 @@ class JobStore:
                     output_path TEXT,
                     capability TEXT,
                     parameters TEXT,
+                    continuation_task_id TEXT,
+                    execution_profile TEXT,
                     FOREIGN KEY(job_id) REFERENCES jobs(id)
                 )"""
             )
@@ -448,6 +518,12 @@ class JobStore:
                 db.execute("ALTER TABLE job_runs ADD COLUMN capability TEXT")
             if "parameters" not in run_columns:
                 db.execute("ALTER TABLE job_runs ADD COLUMN parameters TEXT")
+            if "continuation_task_id" not in run_columns:
+                db.execute("ALTER TABLE job_runs ADD COLUMN continuation_task_id TEXT")
+            if "execution_profile" not in run_columns:
+                db.execute("ALTER TABLE job_runs ADD COLUMN execution_profile TEXT")
+            db.execute("CREATE INDEX IF NOT EXISTS job_runs_continuation ON job_runs(continuation_task_id) WHERE continuation_task_id IS NOT NULL")
+            db.execute("CREATE INDEX IF NOT EXISTS job_runs_occurrence ON job_runs(job_id, scheduled_at)")
             db.execute(
                 """UPDATE job_runs SET
                     capability = COALESCE(capability, (SELECT capability FROM jobs WHERE jobs.id = job_runs.job_id), 'video_summary'),
@@ -517,6 +593,35 @@ class JobStore:
                 (due_at, 1 if enabled else 0, job_id),
             )
 
+    def claim_due(self, job_id, due, following, missed, missed_detail=None):
+        """Advance this exact occurrence and journal it before dispatch.
+
+        Return 'new', 'existing' (legacy journal already present), or 'stale'.
+        A crash after commit leaves a recoverable queued record, never an
+        apparently unclaimed occurrence eligible for a second submission.
+        """
+        import time
+
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            changed = db.execute("UPDATE jobs SET due_at=?,enabled=? WHERE id=? AND enabled=1 AND due_at=?",
+                                 (due if following is None else following, int(following is not None),
+                                  job_id, due)).rowcount
+            if not changed:
+                return "stale"
+            if db.execute("SELECT 1 FROM job_runs WHERE job_id=? AND scheduled_at=? LIMIT 1",
+                          (job_id,due)).fetchone():
+                return "existing"
+            status = "missed" if missed else "queued"
+            detail = ("已超过计划执行的宽限，本次已跳过。" if missed
+                      else "已到计划时间，等待后台执行。")
+            if missed and missed_detail:
+                detail = missed_detail
+            db.execute("""INSERT INTO job_runs(job_id,scheduled_at,finished_at,status,detail,capability,parameters)
+                          SELECT id,?,?,?,?,capability,parameters FROM jobs WHERE id=?""",
+                       (due,time.time(),status,detail,job_id))
+            return "new"
+
     def record_run(
         self,
         job_id: str,
@@ -525,22 +630,30 @@ class JobStore:
         detail: str,
         output_path: Optional[str] = None,
         started_at: Optional[float] = None,
-    ) -> None:
+        *, execution_profile: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         import time
 
+        profile_json = json.dumps(execution_profile, ensure_ascii=False) if execution_profile is not None else None
         with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             job = db.execute("SELECT capability,parameters FROM jobs WHERE id = ?", (job_id,)).fetchone()
-            pending = db.execute("SELECT id,status FROM job_runs WHERE job_id=? AND scheduled_at=? ORDER BY id DESC LIMIT 1", (job_id, scheduled_at)).fetchone()
+            pending = db.execute("SELECT id,status,continuation_task_id FROM job_runs WHERE job_id=? AND scheduled_at=? ORDER BY id DESC LIMIT 1", (job_id, scheduled_at)).fetchone()
             if pending:
-                if pending["status"] not in {"queued", "running"}:
-                    return
-                db.execute("UPDATE job_runs SET status=?,detail=?,output_path=?,started_at=COALESCE(?,started_at),finished_at=? WHERE id=?",
-                           (status, detail, output_path, started_at, time.time(), pending["id"]))
-                return
+                if pending["continuation_task_id"] is not None:
+                    return False
+                active = pending["status"] in {"queued","running"}
+                finishing_wait = pending["status"] == "waiting_user" and status in {"completed","cancelled","failed","interrupted"}
+                if not (active or finishing_wait):
+                    return False
+                db.execute("""UPDATE job_runs SET status=?,detail=?,output_path=?,started_at=COALESCE(?,started_at),
+                    finished_at=?,execution_profile=COALESCE(execution_profile,?) WHERE id=?""",
+                    (status, detail, output_path, started_at, time.time(), profile_json, pending["id"]))
+                return True
             db.execute(
                 """INSERT INTO job_runs
-                   (job_id,scheduled_at,started_at,finished_at,status,detail,output_path,capability,parameters)
-                   VALUES(?,?,?,?,?,?,?,?,?)""",
+                   (job_id,scheduled_at,started_at,finished_at,status,detail,output_path,capability,parameters,execution_profile)
+                   VALUES(?,?,?,?,?,?,?,?,?,?)""",
                 (
                     job_id,
                     scheduled_at,
@@ -551,12 +664,39 @@ class JobStore:
                     output_path,
                     job["capability"] if job else None,
                     job["parameters"] if job else None,
+                    profile_json,
                 ),
             )
+            return True
 
-    def recent_runs(self, limit: int = 30) -> List[Dict[str, Any]]:
+    def cancel_run(self, run_id):
+        """Cancel an occurrence still owned by the scheduler and return its current state."""
+        import time
+
         with self._connect() as db:
-            rows = db.execute(
-                "SELECT * FROM job_runs ORDER BY finished_at DESC LIMIT ?", (limit,)
-            ).fetchall()
-            return [self._decode_parameters(row) for row in rows]
+            db.execute("""UPDATE job_runs SET status='cancelled',detail='用户取消本次执行；后续计划保持原安排。',finished_at=?
+                WHERE id=? AND status IN ('queued','running','waiting_user') AND continuation_task_id IS NULL""",
+                (time.time(), run_id))
+            return db.execute("SELECT id,job_id,scheduled_at,status,continuation_task_id FROM job_runs WHERE id=?", (run_id,)).fetchone()
+
+    def cancelled_occurrences(self, occurrences):
+        cancelled = []
+        with self._connect() as db:
+            for key in occurrences:
+                row = db.execute("""SELECT status FROM job_runs WHERE job_id=? AND scheduled_at=?
+                    ORDER BY id DESC LIMIT 1""", key).fetchone()
+                if row and row["status"] == "cancelled":
+                    cancelled.append(key)
+        return cancelled
+
+    def recent_runs(self, limit: int = 30, *, include_waiting_papers: bool = False) -> List[Dict[str, Any]]:
+        with self._connect() as db:
+            query = "SELECT * FROM job_runs ORDER BY finished_at DESC LIMIT ?"
+            if include_waiting_papers:
+                query = """SELECT * FROM job_runs WHERE id IN (SELECT id FROM job_runs ORDER BY finished_at DESC LIMIT ?)
+                    OR (status='waiting_user' AND capability='paper_summary') ORDER BY finished_at DESC"""
+            rows = db.execute(query, (limit,)).fetchall()
+            runs = [self._decode_parameters(row) for row in rows]
+            for run in runs:
+                run["execution_profile"] = json.loads(run["execution_profile"] or "null")
+            return runs

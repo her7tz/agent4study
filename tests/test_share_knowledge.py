@@ -207,6 +207,59 @@ class ShareKnowledgePipelineTests(unittest.TestCase):
         self.assertEqual(self.counts(), {"knowledge_entries": 2, "knowledge_documents": 1, "knowledge_sources": 2, "knowledge_batches": 1})
         self.assertEqual(len(list(self.settings.output_dir.rglob("*.md"))), 1)
 
+    def test_retry_after_index_failure_reuses_extracted_snapshot_across_restart(self):
+        job = self.service.request_share(URL)
+        with self.service.store.connect() as database:
+            database.execute("""CREATE TRIGGER reject_batch BEFORE INSERT ON knowledge_batches
+                BEGIN SELECT RAISE(ABORT, 'fixture indexing failure'); END""")
+        with patch("share_links.read_shared_conversation", return_value=snapshot()), \
+                patch.object(self.service, "_extract", return_value=points()):
+            failed = self.dispatch(job)
+        self.assertEqual(failed["status"], "failed")
+        self.assertIn("fixture indexing failure", failed["error"])
+        self.assertIn("可重试保存", failed["stage"])
+        self.assertNotIn("extracted_points", failed)
+        self.assertEqual(sum(self.counts().values()), 0)
+        self.assertEqual(list(self.settings.output_dir.rglob("*.md")), [])
+        with self.service.store.connect() as database:
+            database.execute("DROP TRIGGER reject_batch")
+        self.service.close()
+        self.settings.api_key = ""
+        self.service = KnowledgeService(self.chat_database, lambda: self.settings, logger=Mock())
+        self.addCleanup(self.service.close)
+        retry = self.service.retry(job["id"])
+        with patch("share_links.read_shared_conversation") as reader, \
+                patch.object(self.service, "_extract") as extract, \
+                patch("agent_profiles.resolve_agent", side_effect=AssertionError("no model needed")) as resolve:
+            completed = self.dispatch(retry)
+        reader.assert_not_called()
+        extract.assert_not_called()
+        resolve.assert_not_called()
+        self.assertEqual((completed["id"], completed["status"]), (job["id"], "completed"))
+        document = self.service.store.document(job["id"])
+        self.assertEqual(document["points"], points())
+        self.assertEqual(document["source_details"], snapshot()["source_details"])
+        with self.service.connect() as database:
+            self.assertIsNone(database.execute("SELECT extracted_points FROM knowledge_ingestions WHERE id=?", (job["id"],)).fetchone()[0])
+        self.assertEqual(self.counts(), {"knowledge_entries": 2, "knowledge_documents": 1, "knowledge_sources": 2, "knowledge_batches": 1})
+        self.assertEqual(len(list(self.settings.output_dir.rglob("*.md"))), 1)
+
+    def test_unreadable_model_profile_does_not_leave_job_queued(self):
+        from agent_profiles import AgentProfiles
+
+        job = self.service.request_share(URL)
+        profile = self.settings.data_home / "agent-profiles.json"
+        profile.write_text("{")
+        with patch("agent_profiles.resolve_agent", side_effect=lambda settings, role: AgentProfiles(settings).resolve(role)), \
+                patch("share_links.read_shared_conversation") as reader:
+            failed = self.dispatch(job)
+        reader.assert_not_called()
+        self.assertEqual(failed["status"], "failed")
+        profile.unlink()
+        with patch("share_links.read_shared_conversation", return_value=snapshot()), \
+                patch.object(self.service, "_extract", return_value=points()):
+            self.assertEqual(self.dispatch(self.service.retry(job["id"]))["status"], "completed")
+
     def test_empty_knowledge_still_saves_one_share_archive(self):
         job = self.service.request_share(URL)
         with patch("share_links.read_shared_conversation", return_value=snapshot()), patch.object(self.service, "_extract", return_value=[]):
@@ -217,6 +270,34 @@ class ShareKnowledgePipelineTests(unittest.TestCase):
         files = list(self.settings.output_dir.rglob("*.md"))
         self.assertEqual(len(files), 1)
         self.assertIn("未发现可复用的知识点", files[0].read_text(encoding="utf-8"))
+
+    def test_media_only_turn_is_kept_in_snapshot_but_not_sent_as_evidence(self):
+        self.settings.skill_instructions = ''
+        job = self.service.request_share(URL)
+        html = ('<div data-message-author-role="user">怎样理解递归？</div>'
+                '<div data-message-author-role="assistant" data-message-id="audio">'
+                '<audio>仅播放器提示</audio></div>'
+                '<div data-message-author-role="assistant">递归需要终止条件。</div>')
+        with patch('share_links.fetch_public', return_value=(URL, html, 'text/html')), \
+             patch('knowledge.create_client'), patch('knowledge.SummaryEngine') as engine:
+            engine.return_value.summarize.return_value.as_dict.return_value = {
+                'overview':'', 'units':[{'title':'终止条件','content':'递归需要终止条件。','source_ids':['3']}],
+                'processing':{'source_blocks':2}}
+            completed = self.dispatch(job)
+        self.assertEqual(completed['status'], 'completed', completed.get('error'))
+        blocks = engine.return_value.summarize.call_args.args[0]
+        self.assertEqual([block.id for block in blocks], ['1','3'])
+        with self.service.store.connect() as db:
+            saved, = db.execute('SELECT messages FROM knowledge_documents WHERE id=?', (job['id'],)).fetchone()
+        messages = json.loads(saved)
+        self.assertEqual([message['id'] for message in messages], [1,2,3])
+        self.assertFalse(messages[1]['has_readable_text'])
+        self.assertEqual(messages[1]['source_message_id'], 'audio')
+        entry = self.service.store.get(completed['result']['entry_ids'][0])
+        self.assertEqual([message['id'] for message in entry['sources'][0]['evidence']], [3])
+        report = (self.settings.output_dir/completed['result']['document']['name']).read_text()
+        self.assertIn('有 1 条消息仅含未读取的媒体或附件', report)
+        self.assertIn('分享文字来源：消息 3', report)
 
     def test_missing_api_key_fails_before_reading_remote_share(self):
         self.settings.api_key = ""

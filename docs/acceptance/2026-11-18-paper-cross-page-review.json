@@ -1,0 +1,18 @@
+{
+  "date": "2026-11-18",
+  "scope": "Single-unit source-window review of the existing uploaded paper",
+  "before": "研究覆盖三个 state-of-the-art 软件工程 agent，共 120 条轨迹、2,822 次迭代，聚焦程序修复与 issue resolution：\n\n- **RepairAgent**：自主程序修复 agent，在 Defects4J 的 835 个 bug 上评估；只取主轨迹，忽略 mutation sub-trajectory。\n- **AutoCodeRover**：面向自动 issue resolution，在 SWE-bench Lite 的 300 个实例上评估；使用 AutoCodeRover V1 的轨迹。作者说明后续版本存在但其轨迹不可得；AutoCodeRover 运行三次并报告平均结果，作者称三次运行间没有根本差异，因此选用第一次运行的轨迹。\n- **OpenHands**：通用代码编辑 agent，也在 SWE-bench Lite 的 300 个任务上评估；使用面向 issue resolution 的 OpenHands CodeAct 版本。\n\n为保证多样性和人工标注可管理，每个 agent 随机抽取 40 条轨迹，合计 120 条。作者以约 27% 的平均成功率为参考进行比例抽样，抽取约 10 条；但“about 10”之后的完整抽样对象和规则需由后续原文确认，不能确认每 agent 成功轨迹的具体数量，也不能确认 120 条是否全部为成功轨迹。上述数据集和版本选择限定了结论的适用范围。",
+  "after": "研究覆盖三个 state-of-the-art 软件工程 agent，共 120 条轨迹、2,822 次迭代，聚焦程序修复与 issue resolution：\n\n- **RepairAgent**：自主程序修复 agent，在 Defects4J 的 835 个 bug 上评估；只取主轨迹，忽略 mutation sub-trajectory。\n- **AutoCodeRover**：面向自动 issue resolution，在 SWE-bench Lite 的 300 个实例上评估；使用 AutoCodeRover V1 的轨迹。作者说明后续版本存在但其轨迹不可得；AutoCodeRover 运行三次并报告平均结果，作者称三次运行间没有根本差异，因此选用第一次运行的轨迹。\n- **OpenHands**：通用代码编辑 agent，也在 SWE-bench Lite 的 300 个任务上评估；使用面向 issue resolution 的 OpenHands CodeAct 版本。\n\n为保证多样性和人工标注可管理，每个 agent 随机抽取 40 条轨迹；以三个 agent 约 27% 的平均成功率为参考，按比例使每个 agent 包含约 10 条成功轨迹。每条轨迹记录一次完整的 bug repair 或 issue resolution 过程，包含 agent 与环境的迭代交互。最终数据集为 120 条轨迹、2,822 次迭代；120 条轨迹并非全部成功，每个 agent 的成功轨迹约为 10 条，而非精确数量。上述数据集、版本和抽样方式限定了结论的适用范围。",
+  "source_ids": [
+    "paper-page-1",
+    "paper-page-2",
+    "paper-page-3"
+  ],
+  "review_batches": 1,
+  "full_material": false,
+  "checks": {
+    "about_ten_successful_trajectories_per_agent_preserved": true,
+    "source_ids_preserved": true
+  },
+  "limitations": "Only the previously identified sampling unit was rerun. The saved full report was not regenerated."
+}

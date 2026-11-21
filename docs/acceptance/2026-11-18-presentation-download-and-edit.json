@@ -1,0 +1,30 @@
+{
+  "date": "2026-11-18",
+  "fixtures": "Synthetic paper and local copies of the generated presentation; no personal paper, account, or external model required",
+  "desktop_manual_save": {
+    "before_fix": "Clicking the Markdown PPT attachment started a request but showed a workspace connection failure overlay",
+    "after_fix": "The same report attachment opens the native save panel; selected a temporary directory and saved the file",
+    "uses_unmodified_native_desktop_code": true,
+    "saved_bytes_match_report_attachment": true,
+    "sha256": "dfbb4baa53471eee436fca340f47f1d398eb8da1becd7299402667a3f777c197"
+  },
+  "native_editor": {
+    "application": "WPS Office for macOS",
+    "action": "Opened an earlier desktop download and edited the existing title text box on the first slide, then saved in WPS",
+    "slide_count_after_save": 11,
+    "replacement_text_found_in_saved_slide_xml": true,
+    "original_report_attachment_unchanged": true,
+    "original_sha256": "c67889903d059c2b0cc2586f61a0c31c512e023d12b1ef11440927a3da0e0e62",
+    "edited_copy_sha256": "72f94c5e8ac030aafd42f2e6c3e9bf72f7344bc0ec06708440386f371af0408a"
+  },
+  "offline_export": {
+    "source_filename_contains_spaces_hash_percent_and_parentheses": true,
+    "export_reads_latest_markdown": true,
+    "local_service_closed_before_opening_html": true,
+    "browser_offline": true,
+    "figure_visible_and_bytes_match": true,
+    "downloads_match_source": ["original.pdf", "source-evidence.json", "presentation-plan.json", "presentation.pptx"],
+    "zip_member_count": 6,
+    "zip_contents_match_source": true
+  }
+}

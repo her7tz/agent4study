@@ -1,0 +1,88 @@
+{
+  "date": "2026-11-06",
+  "status": "desktop_interactions_passed_self_launch_blocked_in_python_initialization",
+  "scope": "Native AppKit/WKWebView app compiled from current source; temporary workspace, real HTTP/ChatService/task pool/SQLite",
+  "synthetic_boundaries": [
+    "conversation.create_client",
+    "web_server.execute_capability"
+  ],
+  "external_model_calls": 0,
+  "user_workspace_modified": false,
+  "checks_passed": [
+    "Native Stop retains streamed text and displays cancelled; retry displays distinct second response",
+    "Synthetic model failure is visible; retry replaces failed response with successful second response",
+    "Two tasks visibly run concurrently; cancel alpha leaves beta running, beta completes and returns to original conversation",
+    "Actual external backend crash exits 75; desktop displays local service stopped",
+    "After supported external-service restart, same conversation preserves previous task results and marks original partial reply interrupted",
+    "Native retry of interrupted reply completes with second response",
+    "Native role form saves independent paper model, shows independent status, restores default inheritance and inherited model",
+    "Quitting desktop leaves separately launched service healthy; explicit acceptance shutdown exits service 0"
+  ],
+  "persisted_runs_after_restart": [
+    {
+      "id": "a858457815b54de7899c782b067b58af",
+      "status": "cancelled",
+      "stage": "已停止"
+    },
+    {
+      "id": "fcf88a04a9544dea8793157b2fd3f4f3",
+      "status": "completed",
+      "stage": "回复完成"
+    },
+    {
+      "id": "eb3b9352cd574b62ae3bc08385b3deee",
+      "status": "failed",
+      "stage": "回复失败"
+    },
+    {
+      "id": "9014a1303ad845f08bbe9379d9735dc8",
+      "status": "completed",
+      "stage": "回复完成"
+    },
+    {
+      "id": "b7aa5683fc0b40c5922baabe9670b84e",
+      "status": "completed",
+      "stage": "回复完成"
+    },
+    {
+      "id": "51baa53bc46b44d69c2fe4457dd307ee",
+      "status": "interrupted",
+      "stage": "服务重启，回复已中断"
+    },
+    {
+      "id": "222f2633c55d4e8e87a9ac58114930a1",
+      "status": "completed",
+      "stage": "回复完成"
+    }
+  ],
+  "persisted_task_statuses": [
+    "completed",
+    "cancelled"
+  ],
+  "self_launch_observation": {
+    "state": "Native-owned child remained sleeping before application script and socket startup",
+    "sampled_stack": "Py_InitializeFromConfig -> config_init_import -> getpath_readlines -> fopen -> __open_nocancel",
+    "cpu_percent": 0.0,
+    "backend_log_bytes": 0,
+    "python_configuration_file": "Documents checkout .venv/pyvenv.cfg; ordinary 244-byte readable file",
+    "cause": "unresolved; no evidence sufficient to classify as TCC or a production-code defect",
+    "cleanup": "Native Quit terminated owned child; both process IDs were subsequently absent"
+  },
+  "sources": {
+    "desktop/AgentDesktop.swift": "619e86c7ee63d0dd234f7db1b1f3c4cdb5e1ac6dea80d49c1e5b043add1de715",
+    "desktop/AccountBrowser.swift": "78cb8ce22b865b44dd69e17df960fc7054dbe0474d4daa9d8ab3a6e15e04b8c9",
+    "web_server.py": "1810d3d1ce3bf5370cec612934da65b882d1c1cb2a457dba8373058919d7ac6c",
+    "conversation.py": "4eea1b4806c640c21a056692eb3b55ff8202be0af76e3addb2de1e3e82720037"
+  },
+  "cleanup": {
+    "native_app_running": false,
+    "native_owned_stalled_child_running": false,
+    "external_acceptance_backend_exit_code": 0,
+    "remaining_active_tasks": 0
+  },
+  "limitations": [
+    "This fixture verifies native UI and execution lifecycle, not external model quality or actual paper/media processing",
+    "Native-owned restart did not become ready; external-service recovery cannot stand in for that startup path",
+    "High-load queues, notifications permission denial, and actual system sleep/wake were not exercised"
+  ]
+}

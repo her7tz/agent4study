@@ -1,0 +1,20 @@
+{
+  "date": "2026-11-17",
+  "requirements": ["FR-01", "NFR-07"],
+  "artifact": "dist/Agent 工作台.zip",
+  "sha256": "7a25c9b99ef4778853d867ceeb814fcb41ef1082c157d9d00471fcaea714a8aa",
+  "expected_file_count": 4,
+  "file_suffixes": [
+    "_CodeSignature/CodeResources",
+    "MacOS/AgentDesktop",
+    "Resources/AppIcon.icns",
+    "Info.plist"
+  ],
+  "project_binding_matches_current_checkout": true,
+  "python_binding_matches_checkout_venv": true,
+  "extraction_method": "macOS ditto to a temporary directory",
+  "extracted_bundle_exists": true,
+  "strict_deep_codesign_verification_exit_code": 0,
+  "application_started_during_this_check": false,
+  "scope": "当前发布压缩包的结构、工作区绑定与解压验签。没有启动应用、改动用户数据或进行系统休眠测试。"
+}

@@ -8,18 +8,15 @@ remain local configuration and are never included in an API response.
 import copy
 import importlib.util
 import json
-import logging
 import mimetypes
 import os
 import queue
 import re
 import secrets
 import sqlite3
-import sys
 import tempfile
 import threading
 import time
-import traceback
 import urllib.parse
 import uuid
 import webbrowser
@@ -28,19 +25,21 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from capabilities import execute_capability, get_capability, list_capabilities, validate_parameters
+from capabilities import capability_settings_role, execute_capability, get_capability, list_capabilities, validate_parameters
 from conversation import ChatService, ConversationError
 from artifacts import ArtifactStore, ArtifactError
 from local_apps import LocalAppService, LocalAppError
+from study_log import StudyLog, StudyLogError
 from knowledge import KnowledgeError
 from paper_summary import PaperError, PaperUploads, MAX_PDF_BYTES, MaterialRequired
-from agent_profiles import AgentProfiles, ProfileError, resolve_agent, read_skill
-from site_sessions import SiteSessions, SessionError, adapter_for, safe_source
+from agent_profiles import AgentProfiles, ProfileError, execution_profile, resolve_agent, read_skill
+from site_sessions import SiteSessions, SessionError, safe_source
 from storage_layout import FOLDERS, migrate_legacy, resolve_output_alias
 from runtime_control import CancellationToken, RunCancelled
-from harness import DeepSeekClient, JobStore, Settings, asr_runtime_status, notify_local, resolve_tool
+from harness import JobStore, SecretSafeLogger, Settings, asr_runtime_status, notify_local, resolve_tool
 from report_exports import ExportError, build_report_archive
 from scheduler import (
+    failed_stage, scheduler_clock,
     POLL_SECONDS, Scheduler, SchedulerLease,
     add_capability_daily_job, add_capability_once_job,
 )
@@ -65,49 +64,6 @@ from runtime_pool import ParallelDaemonExecutor
 class SerialDaemonExecutor(ParallelDaemonExecutor):
     """Compatibility for callers explicitly asking for the old serial queue."""
     def __init__(self):super().__init__(1)
-
-
-class SecretSafeLogger:
-    """Avoid exposing secrets even if an upstream error includes credentials."""
-
-    def __init__(self, logger: Any, secret: str):
-        self.logger = logger
-        self.secret = secret
-
-    def clean(self, value: Any) -> str:
-        text = str(value)
-        for secret in self.secret if isinstance(self.secret, (list,tuple)) else [self.secret]:
-            if secret: text = text.replace(secret,"[已隐藏]")
-        return text
-
-    def _log(self, level: int, message: Any, *args: Any, **kwargs: Any) -> None:
-        try:
-            text = str(message) % args if args else str(message)
-        except (TypeError, ValueError):
-            text = str(message)
-        kwargs.pop("exc_info", None)
-        self.logger.log(level, self.clean(text), **kwargs)
-
-    def debug(self, message: Any, *args: Any, **kwargs: Any) -> None:
-        self._log(logging.DEBUG, message, *args, **kwargs)
-
-    def info(self, message: Any, *args: Any, **kwargs: Any) -> None:
-        self._log(logging.INFO, message, *args, **kwargs)
-
-    def warning(self, message: Any, *args: Any, **kwargs: Any) -> None:
-        self._log(logging.WARNING, message, *args, **kwargs)
-
-    def error(self, message: Any, *args: Any, **kwargs: Any) -> None:
-        self._log(logging.ERROR, message, *args, **kwargs)
-
-    def exception(self, message: Any, *args: Any, **kwargs: Any) -> None:
-        self.error(message, *args, **kwargs)
-        error = sys.exc_info()[1]
-        if error is not None:
-            # Format first, then redact; standard exc_info would bypass cleaning.
-            self.error("失败堆栈：\n%s", "".join(traceback.format_exception(
-                type(error), error, error.__traceback__
-            )))
 
 
 class UITaskStore:
@@ -140,17 +96,24 @@ class UITaskStore:
             for name, sql in (("conversation_id", "TEXT"), ("session_id", "TEXT"), ("attempt", "INTEGER NOT NULL DEFAULT 1"), ("schedule_job_id", "TEXT"), ("scheduled_at", "REAL"), ("agent_id", "TEXT"), ("group_id", "TEXT")):
                 if name not in columns:
                     db.execute("ALTER TABLE ui_tasks ADD COLUMN " + name + " " + sql)
+            db.execute("CREATE INDEX IF NOT EXISTS ui_tasks_conversation ON ui_tasks(conversation_id, created_at)")
+            db.execute("""CREATE TABLE IF NOT EXISTS ui_task_profiles (
+                task_id TEXT NOT NULL, attempt INTEGER NOT NULL, started_at REAL NOT NULL, profile TEXT NOT NULL,
+                PRIMARY KEY (task_id, attempt))""")
             for row in db.execute("SELECT id,url,include_frames FROM ui_tasks WHERE parameters IS NULL"):
                 db.execute("UPDATE ui_tasks SET parameters=? WHERE id=?", (
                     json.dumps({"url": row["url"], "include_frames": bool(row["include_frames"])}, ensure_ascii=False),
                     row["id"],
                 ))
-            db.execute(
-                """UPDATE ui_tasks SET status='interrupted', stage='已中断',
-                   finished_at=?, error='服务关闭或重启时任务未完成；请重新提交。'
-                   WHERE status IN ('queued','running')""",
-                (time.time(),),
-            )
+            self.has_schedules = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='job_runs'").fetchone() is not None
+            if self.has_schedules:
+                # Recover waiting or resumed papers created before ownership was stored.
+                pending = db.execute("""SELECT id,status,stage,error FROM ui_tasks WHERE schedule_job_id IS NOT NULL
+                    AND (status='waiting_user' OR (attempt>1 AND status IN ('queued','running')))""").fetchall()
+                for task in pending:
+                    if self._claim_schedule_continuation(db, task["id"]):
+                        self._sync_schedule_continuation(db, task["id"], task["status"], task["error"] or task["stage"])
+            self._interrupt_pending(db, "服务关闭或重启时任务未完成；请重新提交。")
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(str(self.database_path), timeout=30)
@@ -176,16 +139,29 @@ class UITaskStore:
         capability: str = "video_summary", parameters: Optional[Dict[str, Any]] = None,
         title: str = "视频总结",
     ) -> Dict[str, Any]:
-        task_id = uuid.uuid4().hex
+        return self.create_batch([{"url": url, "frames": frames, "model": model, "capability": capability,
+            "parameters": parameters if parameters is not None else {"url": url, "include_frames": frames},
+            "title": title}])[0]
+
+    def create_batch(self, entries):
+        tasks = []
         with self._connect() as db:
-            db.execute(
-                """INSERT INTO ui_tasks
-                   (id,url,title,status,stage,created_at,include_frames,model,capability,parameters)
-                   VALUES(?,?,?,'queued','等待执行',?,?,?,?,?)""",
-                (task_id, url, title, time.time(), int(frames), model, capability,
-                 json.dumps(parameters if parameters is not None else {"url": url, "include_frames": frames}, ensure_ascii=False)),
-            )
-        return self.get(task_id) or {}
+            for entry in entries:
+                task_id = uuid.uuid4().hex
+                db.execute("""INSERT INTO ui_tasks
+                    (id,url,title,status,stage,created_at,include_frames,model,capability,parameters,conversation_id,agent_id,group_id)
+                    VALUES(?,?,?,'queued','等待执行',?,?,?,?,?,?,?,?)""",
+                    (task_id, entry["url"], entry["title"], time.time(), int(entry["frames"]), entry["model"],
+                     entry["capability"], json.dumps(entry["parameters"], ensure_ascii=False),
+                     entry.get("conversation_id"), entry.get("agent_id"), entry.get("group_id")))
+                tasks.append(self._task(db.execute("SELECT * FROM ui_tasks WHERE id=?", (task_id,)).fetchone()))
+        return tasks
+
+    def fail_submission(self, task_ids, error):
+        now = time.time()
+        with self._connect() as db:
+            db.executemany("UPDATE ui_tasks SET status='failed',stage='提交失败',error=?,finished_at=? WHERE id=? AND status='queued'",
+                           [(error, now, task_id) for task_id in task_ids])
 
     def list(self) -> List[Dict[str, Any]]:
         with self._connect() as db:
@@ -194,12 +170,37 @@ class UITaskStore:
             ).fetchall()
             return [self._task(row) for row in rows]
 
+    def conversation_tasks(self, conversation_id=None):
+        """Read pending deliveries without the recent-task screen's global cap."""
+        pending = """task.status IN ('completed','failed','cancelled','waiting_user','interrupted')
+            AND NOT EXISTS (SELECT 1 FROM task_deliveries AS delivery WHERE delivery.task_id=task.id
+                AND delivery.version=CAST(task.attempt AS TEXT)||':'||task.status)"""
+        with self._connect() as db:
+            if conversation_id is None:
+                rows = db.execute("SELECT task.* FROM ui_tasks AS task WHERE task.conversation_id IS NOT NULL AND " + pending)
+            else:
+                rows = db.execute("""SELECT task.* FROM ui_tasks AS task WHERE task.conversation_id=?
+                    AND (task.status IN ('queued','running') OR (""" + pending + ")) ORDER BY task.created_at DESC",
+                    (conversation_id,))
+            return [self._task(row) for row in rows]
+
     def get(self, task_id: str, with_markdown: bool = False) -> Optional[Dict[str, Any]]:
         with self._connect() as db:
+            if with_markdown:
+                db.execute("BEGIN")
             row = db.execute("SELECT * FROM ui_tasks WHERE id=?", (task_id,)).fetchone()
-            return self._task(row, with_markdown) if row is not None else None
+            if row is None:
+                return None
+            result = self._task(row, with_markdown)
+            if with_markdown:
+                profiles = db.execute("SELECT attempt,started_at,profile FROM ui_task_profiles WHERE task_id=? ORDER BY attempt", (task_id,))
+                result["execution_profiles"] = [
+                    {**json.loads(profile["profile"]), "attempt": profile["attempt"], "started_at": profile["started_at"]}
+                    for profile in profiles
+                ]
+            return result
 
-    def update(self, task_id: str, **values: Any) -> None:
+    def update(self, task_id: str, *, schedule_output_path=None, execution_profile=None, **values: Any) -> bool:
         fields = {
             "title", "status", "stage", "finished_at", "error", "output_file", "conversation_id", "session_id", "attempt", "schedule_job_id", "scheduled_at", "agent_id", "group_id", "parameters", "model",
             "sections", "frames", "markdown",
@@ -209,22 +210,112 @@ class UITaskStore:
         sql = "UPDATE ui_tasks SET {} WHERE id=? AND status NOT IN ('interrupted','cancelled','deleted')".format(
             ",".join(name + "=?" for name in values)
         )
+        status = values.get("status")
+        if execution_profile is not None:
+            if status != "running":
+                raise ValueError("执行配置只能在开始任务时保存。")
+            sql += " AND status='queued'"
+        if status == "cancelled":
+            sql += " AND status IN ('queued','running','waiting_user')"
         with self._connect() as db:
-            db.execute(sql, list(values.values()) + [task_id])
+            if not db.execute(sql, list(values.values()) + [task_id]).rowcount:
+                return False
+            if execution_profile is not None:
+                db.execute("""INSERT INTO ui_task_profiles (task_id,attempt,started_at,profile)
+                    SELECT id,attempt,?,? FROM ui_tasks WHERE id=?""",
+                    (time.time(), json.dumps(execution_profile, ensure_ascii=False), task_id))
+            if status == "waiting_user" and not self._claim_schedule_continuation(db, task_id):
+                db.rollback()
+                return False
+            if status:
+                detail = values.get("error") or values.get("stage") or status
+                self._sync_schedule_continuation(db, task_id, status, detail, schedule_output_path)
+            elif self.has_schedules and "stage" in values:
+                db.execute("UPDATE job_runs SET detail=? WHERE continuation_task_id=? AND status='running'",
+                           (values["stage"], task_id))
+            return True
+
+    def _claim_schedule_continuation(self, db, task_id):
+        task = db.execute("SELECT schedule_job_id,scheduled_at FROM ui_tasks WHERE id=?", (task_id,)).fetchone()
+        if not task["schedule_job_id"]:
+            return True
+        if not self.has_schedules:
+            return False
+        return bool(db.execute("""UPDATE job_runs SET continuation_task_id=?
+            WHERE id=(SELECT id FROM job_runs WHERE job_id=? AND scheduled_at=? ORDER BY id DESC LIMIT 1)
+            AND (continuation_task_id=? OR (continuation_task_id IS NULL
+                 AND status IN ('queued','running','waiting_user','failed','interrupted')))""",
+            (task_id, task["schedule_job_id"], task["scheduled_at"], task_id)).rowcount)
+
+    def _sync_schedule_continuation(self, db, task_id, status, detail, output_path=None):
+        if self.has_schedules:
+            now = time.time()
+            db.execute("""UPDATE job_runs SET status=?,detail=?,output_path=?,finished_at=?,
+                started_at=CASE WHEN ?='queued' THEN NULL WHEN ?='running' THEN COALESCE(started_at,?) ELSE started_at END
+                WHERE continuation_task_id=?""", (status, detail, output_path, now, status, status, now, task_id))
+
+    def prepare_scheduled_paper(self, run_id, model, role):
+        """Attach a page task to an occurrence waiting in the standalone scheduler."""
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            run = db.execute("SELECT * FROM job_runs WHERE id=?", (run_id,)).fetchone()
+            if not run:
+                raise APIError(404, "没有找到这次定时执行。")
+            if run["status"] != "waiting_user" or run["capability"] != "paper_summary":
+                raise APIError(409, "这次执行当前没有在等待论文材料。")
+            task_id = run["continuation_task_id"]
+            if not task_id:
+                parameters = JobStore._decode_parameters(run)["parameters"]
+                if not isinstance(parameters, dict) or not isinstance(parameters.get("url"), str) or not parameters["url"]:
+                    raise APIError(409, "这次执行缺少原论文链接，无法继续获取材料。")
+                try:
+                    parameters["url"] = safe_source(parameters["url"])
+                except ValueError as exc:
+                    raise APIError(409, "这次执行的原论文链接无效，无法继续获取材料。") from exc
+                origin = db.execute("SELECT conversation_id FROM schedule_conversations WHERE job_id=?", (run["job_id"],)).fetchone()
+                task_id = uuid.uuid4().hex
+                db.execute("""INSERT INTO ui_tasks(id,url,title,status,stage,created_at,include_frames,model,capability,
+                    parameters,error,conversation_id,schedule_job_id,scheduled_at,agent_id)
+                    VALUES(?,?,'论文总结','waiting_user','等待登录或论文 PDF',?,0,?,'paper_summary',?,?,?,?,?,?)""",
+                    (task_id, parameters["url"], time.time(), model, json.dumps(parameters, ensure_ascii=False), run["detail"],
+                     origin[0] if origin else None, run["job_id"], run["scheduled_at"], role))
+                db.execute("UPDATE job_runs SET continuation_task_id=? WHERE id=?", (task_id, run["id"]))
+            task = db.execute("SELECT * FROM ui_tasks WHERE id=?", (task_id,)).fetchone()
+            if not task:
+                raise APIError(409, "这次执行关联的论文任务已不存在。")
+            return self._task(task)
 
     def resume(self,task_id,parameters):
+        stage = "已导入 PDF，等待继续总结"
         with self._connect() as db:
-            changed=db.execute("UPDATE ui_tasks SET parameters=?,status='queued',stage='已导入 PDF，等待继续总结',error=NULL,finished_at=NULL,attempt=attempt+1 WHERE id=? AND status IN ('waiting_user','failed','interrupted')",(json.dumps(parameters,ensure_ascii=False),task_id)).rowcount
-        if not changed:raise APIError(409,'任务状态已变化，不能重复继续。')
+            changed = db.execute("""UPDATE ui_tasks SET parameters=?,status='queued',stage=?,error=NULL,finished_at=NULL,attempt=attempt+1
+                WHERE id=? AND status IN ('waiting_user','failed','interrupted')""",
+                (json.dumps(parameters, ensure_ascii=False), stage, task_id)).rowcount
+            if not changed or not self._claim_schedule_continuation(db, task_id):
+                raise APIError(409, '任务状态已变化，不能重复继续。')
+            self._sync_schedule_continuation(db, task_id, "queued", stage)
+
+    def attach_paper_session(self, task_id, session_id):
+        with self._connect() as db:
+            changed = db.execute("""UPDATE ui_tasks SET session_id=? WHERE id=? AND capability='paper_summary'
+                AND status IN ('waiting_user','failed','interrupted')""", (session_id, task_id)).rowcount
+            if not changed:
+                raise APIError(409, "任务状态已变化，不能打开论文材料窗口。")
+
+    def _interrupt_pending(self, db, message):
+        now = time.time()
+        if self.has_schedules:
+            db.execute("""UPDATE job_runs SET status='interrupted',detail=?,finished_at=?
+                WHERE continuation_task_id IN (SELECT id FROM ui_tasks WHERE status IN ('queued','running'))""", (message, now))
+        db.execute("""UPDATE ui_tasks SET status='interrupted',stage='已中断',finished_at=?,error=?
+            WHERE status IN ('queued','running')""", (now, message))
 
     def interrupt_pending(self) -> None:
         with self._connect() as db:
-            db.execute(
-                """UPDATE ui_tasks SET status='interrupted',stage='已中断',
-                   finished_at=?,error='服务已关闭；请重新提交未完成的任务。'
-                   WHERE status IN ('queued','running')""",
-                (time.time(),),
-            )
+            self._interrupt_pending(db, "服务已关闭；请重新提交未完成的任务。")
+
+
+from qq_channel import QQChannel, QQError
 
 
 class WebRuntime:
@@ -233,6 +324,7 @@ class WebRuntime:
         self.settings = settings
         self.logger = logger
         self.settings_lock = threading.RLock()
+        self.qq = QQChannel(self.snapshot)
         self.site_sessions = SiteSessions(settings)
         self.token = secrets.token_urlsafe(32)
         self.store = JobStore(settings.database_path)
@@ -243,19 +335,20 @@ class WebRuntime:
         self.task_tokens = {}
         self.task_tokens_lock = threading.Lock()
         self.scheduler = None
-        self.chat = ChatService(settings.database_path, self.snapshot, self.create_capability_task, self.logger, task_provider=self.tasks.list, cancel_task=self.cancel_task, cancel_scheduled_run=self.cancel_scheduled_run)
+        self.chat = ChatService(settings.database_path, self.snapshot, self.create_capability_task, self.logger,
+                                task_provider=self.tasks.list, cancel_task=self.cancel_task,
+                                cancel_scheduled_run=self.cancel_scheduled_run, conversation_tasks=self.tasks.conversation_tasks)
         self.chat.task_lookup=self.tasks.get
         self.chat.create_delegations=self.create_delegations
         self.chat.knowledge.executor=self.executor
-        for task in self.tasks.list():self.chat.deliver_task(self.tasks.get(task["id"],with_markdown=True))
+        for task in self.tasks.conversation_tasks():
+            self.chat.deliver_task(self.tasks.get(task["id"], with_markdown=True))
         self.lease = SchedulerLease(settings.data_home / "scheduler.lock")
         self.scheduler_owned = self.lease.acquire()
-        self.scheduler_thread: Optional[threading.Thread] = None
-        if self.scheduler_owned:
-            self.scheduler_thread = threading.Thread(
-                target=self._schedule_loop, name="agent-web-scheduler", daemon=True
-            )
-            self.scheduler_thread.start()
+        self.scheduler_thread = threading.Thread(
+            target=self._watch_scheduler, name="agent-web-scheduler", daemon=True
+        )
+        self.scheduler_thread.start()
 
     def snapshot(self) -> Settings:
         with self.settings_lock:
@@ -269,32 +362,42 @@ class WebRuntime:
         return LocalAppService(self.artifacts(), logger=self.logger)
 
     def status(self) -> Dict[str, Any]:
+        from paper_presentation_rendering import presentation_ready
         settings = self.snapshot()
         asr = asr_runtime_status()
+        conversation = AgentProfiles(settings).public("conversation")
+        scheduler_watched = not self.stop_event.is_set() and self.scheduler_thread.is_alive()
+        scheduler_owned = self.scheduler_owned
+        scheduler = self.scheduler
+        scheduler_ready = bool(scheduler and scheduler.recovery_complete.is_set())
         return {
             "app_name": "本地 Agent",
+            "process_id": os.getpid(),
             "version": "0.6.0",
             "interaction": "agent_console",
             "parallel": self.executor.status(),
             "api_key_configured": bool(settings.api_key),
             "provider": "deepseek",
             "model": settings.model,
+            "conversation": {key: conversation[key] for key in ("model", "provider", "api_key_configured")},
             "base_url": settings.base_url,
             "models": MODEL_NAMES,
             "dependencies": {
                 "paper_pdf": bool(importlib.util.find_spec("pypdf")),
+                "paper_presentation": presentation_ready(settings),
                 "yt_dlp": bool(resolve_tool("yt-dlp")),
                 "ffmpeg": bool(resolve_tool("ffmpeg")),
                 "asr": asr["ready"],
                 "javascript_runtime": bool(resolve_tool("deno") or resolve_tool("node")),
             },
             "dependency_errors": {"asr": asr["error"]},
-            "scheduler_running": not self.stop_event.is_set(),
-            "scheduler_owner": "web" if self.scheduler_owned else "external",
+            "scheduler_running": scheduler_watched and (not scheduler_owned or scheduler_ready),
+            "scheduler_owner": ("web" if scheduler_owned else "external") if scheduler_watched else "none",
+            "data_dir": str(settings.data_home.resolve()),
             "output_dir": str(settings.output_dir.resolve()),
             "folders": [{"id": key, "title": title, "path": str(settings.output_dir.resolve() / key)} for key, title in FOLDERS.items()],
             "automatic_save": True,
-            "timezone": "Asia/Shanghai",
+            **scheduler_clock(),
             "csrf_token": self.token,
         }
 
@@ -355,7 +458,7 @@ class WebRuntime:
             "url": body["url"], "include_frames": frames,
         }})
 
-    def create_capability_task(self, body: Dict[str, Any]) -> Dict[str, Any]:
+    def _prepare_capability_task(self, body, defaults, *, delegated=False):
         capability = body.get("capability")
         parameters = body.get("parameters")
         if not isinstance(capability, str) or not isinstance(parameters, dict):
@@ -363,88 +466,152 @@ class WebRuntime:
         try:
             metadata = get_capability(capability)
             parameters = validate_parameters(capability, parameters)
+            settings_role = capability_settings_role(capability)
         except ValueError as exc:
             raise APIError(400, str(exc)) from exc
         from agent_registry import registry as agents
         if body.get('group_id') and not re.fullmatch(r'[a-f0-9]{32}',str(body['group_id'])):raise APIError(400,'委派批次编号无效。')
-        owner=agents.owner(capability)
-        if body.get("agent_id") and agents.get(body["agent_id"]).id!=owner.id:raise APIError(400,"这项能力不属于指定 Subagent。")
-        settings = resolve_agent(self.snapshot(), owner.id)
+        if metadata.settings_role is not None:
+            if delegated or "agent_id" in body:
+                raise APIError(400, "主 Agent 工作流不能指定 Subagent。")
+        elif delegated or body.get("agent_id"):
+            try:
+                selected_agent = agents.get(body["agent_id"])
+            except ValueError as exc:
+                raise APIError(400, str(exc)) from exc
+            if selected_agent.id != settings_role:
+                raise APIError(400, "这项能力不属于指定 Subagent。")
+            if delegated and (not selected_agent.delegatable or capability not in selected_agent.operations):
+                raise APIError(400, "该 Subagent 不支持委派这项能力。")
+        settings = resolve_agent(defaults, settings_role)
         if not settings.api_key:
             raise APIError(400, "请先在对话中配置该 Agent 的 API Key。")
         if capability == "video_summary" and not resolve_tool("yt-dlp"):
             raise APIError(400, "尚未安装视频读取工具 yt-dlp，请按使用说明安装。")
         if capability == "paper_summary" and parameters.get("upload_id"):
             PaperUploads(settings.data_home).get(parameters["upload_id"])
-        title = metadata.title if hasattr(metadata, "title") else metadata.get("title", capability)
-        conversation_id = body.get("conversation_id") or self.chat.current()["conversation_id"]
-        self.chat._rows(conversation_id)
-        task = self.tasks.create(
-            str(parameters.get("url", "")), bool(parameters.get("include_frames", False)),
-            settings.model, capability=capability, parameters=parameters, title=title,
-        )
-        self.tasks.update(task["id"], conversation_id=conversation_id, agent_id=owner.id,group_id=body.get("group_id"))
-        task = self.tasks.get(task["id"])
+        return {"url": str(parameters.get("url", "")), "frames": bool(parameters.get("include_frames")),
+                "model": settings.model, "capability": capability, "parameters": parameters, "title": metadata.title,
+                "agent_id": settings_role, "group_id": body.get("group_id")}, settings
+
+    def _submit_tasks(self, arguments, *, batch=False):
+        task_ids = [task_id for task_id, _ in arguments]
         with self.task_tokens_lock:
-            self.task_tokens[task["id"]] = CancellationToken()
+            self.task_tokens.update((task_id, CancellationToken()) for task_id in task_ids)
         try:
-            self.executor.submit(self._run_capability, task["id"], settings)
+            if batch:
+                self.executor.submit_many(self._run_capability, arguments)
+            else:
+                self.executor.submit(self._run_capability, *arguments[0])
         except RuntimeError as exc:
             with self.task_tokens_lock:
-                self.task_tokens.pop(task["id"], None)
-            self.tasks.update(
-                task["id"], status="failed", stage="提交失败",
-                error=str(exc), finished_at=time.time(),
-            )
-            raise APIError(503, str(exc)) from exc
+                for task_id in task_ids:
+                    self.task_tokens.pop(task_id, None)
+            error = str(exc) + ("整批未开始。" if batch else "")
+            self.tasks.fail_submission(task_ids, error)
+            raise APIError(503, error) from exc
+
+    def create_capability_task(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        entry, settings = self._prepare_capability_task(body, self.snapshot())
+        conversation_id = body.get("conversation_id") or self.chat.current()["conversation_id"]
+        self.chat._rows(conversation_id)
+        task, = self.tasks.create_batch([{**entry, "conversation_id": conversation_id}])
+        self._submit_tasks([(task["id"], settings)])
         return task
 
     def create_delegations(self, body):
-        from agent_registry import registry as agents
         jobs=body.get("tasks")
         if not isinstance(jobs,list) or not 1<=len(jobs)<=8:raise APIError(400,"一次委派需要 1 至 8 个任务。")
-        normalized=[]
-        for item in jobs:
-            if not isinstance(item,dict) or set(item)-{'agent_id','capability','parameters'}:raise APIError(400,"委派字段无效。")
-            agent=agents.get(item.get("agent_id"))
-            capability=item.get("capability")
-            if not agent.delegatable or capability not in agent.operations:raise APIError(400,"Subagent 不拥有该任务能力。")
-            parameters=validate_parameters(capability,item.get("parameters"))
-            if not resolve_agent(self.snapshot(),agent.id).api_key:raise APIError(400,"请先配置 "+agent.title+" 的凭证。")
-            if capability=='video_summary' and not resolve_tool('yt-dlp'):raise APIError(400,"尚未安装 yt-dlp。")
-            if capability=='paper_summary' and parameters.get('upload_id'):PaperUploads(self.snapshot().data_home).get(parameters['upload_id'])
-            normalized.append({'agent_id':agent.id,'capability':capability,'parameters':parameters})
+        if any(not isinstance(item, dict) or set(item) != {'agent_id', 'capability', 'parameters'} for item in jobs):
+            raise APIError(400, "委派字段无效。")
+        group_id=uuid.uuid4().hex
+        defaults = self.snapshot()
+        prepared = [self._prepare_capability_task({**item, "group_id": group_id}, defaults,
+                                                   delegated=True) for item in jobs]
         conversation_id=body.get('conversation_id') or self.chat.current()['conversation_id']
         self.chat._rows(conversation_id)
-        group_id=uuid.uuid4().hex
-        tasks=[]
         try:
-            for item in normalized:tasks.append(self.create_capability_task({**item,'group_id':group_id,'conversation_id':conversation_id}))
-        except Exception:
-            for task in tasks:self.cancel_task(task['id'])
-            raise
+            tasks = self.tasks.create_batch([{**entry, "conversation_id": conversation_id} for entry, _ in prepared])
+        except sqlite3.Error as exc:
+            self.logger.error("委派批次 %s 保存失败（%s）", group_id, type(exc).__name__)
+            raise APIError(503, "未能保存委派任务，整批未开始。") from exc
+        self._submit_tasks([(task["id"], settings) for task, (_, settings) in zip(tasks, prepared)], batch=True)
         return {'group_id':group_id,'tasks':tasks,'parallel_limit':self.executor.max_workers}
+
+    def _paper_resume_target(self, task_id):
+        task = self.tasks.get(task_id)
+        if not task or task["capability"] != "paper_summary" or task["status"] not in {"waiting_user", "failed", "interrupted"}:
+            raise APIError(409, "该任务不能继续，请查看当前状态。")
+        return task
+
+    def prepare_paper_session(self, task_id):
+        task = self._paper_resume_target(task_id)
+        if task.get("session_id"):
+            try:
+                session = self.site_sessions.get(task["session_id"])
+            except SessionError:
+                session = None
+            if session and session["task_id"] == task_id:
+                if session["status"] == "clear_pending":
+                    raise APIError(409, "登录会话正在清除，请完成后重新打开。")
+                if session["status"] != "cleared":
+                    return session
+        source = task["parameters"].get("url") or task["parameters"].get("source_url")
+        if not source:
+            raise APIError(409, "原任务没有论文链接，可以上传 PDF 继续。")
+        session = self.site_sessions.create(source, task_id, task.get("conversation_id"))
+        self.tasks.attach_paper_session(task_id, session["id"])
+        return session
 
     def resume_task(self, task_id, upload_id):
         PaperUploads(self.snapshot().data_home).get(upload_id)
         with self.task_tokens_lock:
-            task = self.tasks.get(task_id)
-            if not task or task["capability"] != "paper_summary" or task["status"] not in {"waiting_user", "failed", "interrupted"}:
-                raise APIError(409, "该任务不能继续，请查看当前状态。")
+            task = self._paper_resume_target(task_id)
             original = task["parameters"].get("url") or task["parameters"].get("source_url")
             parameters = {"upload_id": upload_id}
             if original: parameters["source_url"] = safe_source(original)
             if task["parameters"].get("title"): parameters["title"] = task["parameters"]["title"]
+            for option in ("include_presentation", "presentation_minutes", "presentation_language"):
+                if option in task["parameters"]:
+                    parameters[option] = task["parameters"][option]
             self.tasks.resume(task_id,parameters)
             self.task_tokens[task_id] = CancellationToken()
             try:
                 self.executor.submit(self._run_capability, task_id, self.snapshot())
             except RuntimeError as exc:
                 self.task_tokens.pop(task_id, None)
-                with self.tasks._connect() as db:
-                    db.execute("UPDATE ui_tasks SET status='interrupted',stage='服务正在退出，请重新导入继续',finished_at=? WHERE id=?",(time.time(),task_id))
+                self.tasks.update(task_id, status="interrupted", stage="服务正在退出，请重新导入继续", finished_at=time.time())
                 raise APIError(503,"服务正在退出，请重新启动后继续。") from exc
         return self.tasks.get(task_id)
+
+    def import_paper_material(self, session_id, data, filename):
+        uploads = PaperUploads(self.snapshot().data_home)
+
+        def attach(session):
+            task_id = session.get("task_id")
+            if task_id:
+                self._paper_resume_target(task_id)
+            metadata = uploads.save(data, filename)
+            upload_id = metadata["upload_id"]
+            try:
+                if task_id:
+                    task = self.resume_task(task_id, upload_id)
+                else:
+                    task = self.create_capability_task({"capability": "paper_summary",
+                        "parameters": {"upload_id": upload_id, "source_url": session["url"]},
+                        "conversation_id": session.get("conversation_id")})
+                    if self.tasks.update(task["id"], session_id=session["id"]):
+                        task["session_id"] = session["id"]
+            except (APIError, ConversationError, ProfileError) as exc:
+                if exc.status < 500:
+                    try:
+                        uploads.discard_unattached(upload_id)
+                    except (OSError, PaperError):
+                        self.logger.warning("未能清理未关联的论文附件 %s", upload_id)
+                raise
+            return metadata, task
+
+        return self.site_sessions.accept_material(session_id, attach)
 
     def cancel_task(self, task_id):
         task = self.tasks.get(task_id)
@@ -456,14 +623,13 @@ class WebRuntime:
             token = self.task_tokens.get(task_id)
         if token:
             token.cancel()
-        if task.get("schedule_job_id") and task["status"] in {"queued","running"} and self.scheduler:
+        if task.get("schedule_job_id") and task["attempt"] == 1 and task["status"] in {"queued","running"} and self.scheduler:
             with self.store._connect() as db:
                 run=db.execute("SELECT id FROM job_runs WHERE job_id=? AND scheduled_at=? ORDER BY id DESC LIMIT 1",(task["schedule_job_id"],task["scheduled_at"])).fetchone()
             if run:self.scheduler.cancel_run(run[0])
-        self.tasks.update(task_id, status="cancelled", stage="已取消", finished_at=time.time(), error=None)
+        if not self.tasks.update(task_id, status="cancelled", stage="已取消", finished_at=time.time(), error=None):
+            return {"task_id": task_id, "status": self.tasks.get(task_id)["status"], "message": "任务已经结束。"}
         self.logger.info("用户已取消后台任务 %s", task_id)
-        if task.get("schedule_job_id") and task["status"]=="waiting_user":
-            self.store.record_run(task["schedule_job_id"],task["scheduled_at"],"cancelled","已取消等待材料的任务。")
         self.chat.deliver_task(self.tasks.get(task_id))
         return {"task_id": task_id, "status": "cancelled"}
 
@@ -487,15 +653,15 @@ class WebRuntime:
         def progress(stage: str) -> None:
             token.check()
             if not self.stop_event.is_set():
-                self.tasks.update(task_id, stage=stage)
+                self.tasks.update(task_id, stage=safe_logger.clean(stage))
 
         try:
-            from agent_registry import registry as agents
-            settings = resolve_agent(self.snapshot(), agents.owner(capability).id)
+            settings = resolve_agent(self.snapshot(), capability_settings_role(capability))
             safe_logger = SecretSafeLogger(self.logger, settings._profile_secrets + (settings.api_key,))
-            self.tasks.update(task_id, model=settings.model, status="running", stage="开始执行" + task["title"])
-            if capability == "paper_summary" and task["parameters"].get("url") and adapter_for(task["parameters"]["url"])["id"] == "ieee":
-                raise MaterialRequired("IEEE Xplore 使用人工登录与下载流程。请打开专用窗口下载论文 PDF，或直接上传 PDF 后继续同一任务。")
+            token.check()
+            if not self.tasks.update(task_id, execution_profile=execution_profile(settings),
+                                     model=settings.model, status="running", stage="开始执行" + task["title"]):
+                return
             result = execute_capability(capability, task["parameters"], settings, logger=safe_logger, progress=progress, cancellation=token)
             relative = None
             if result.get("path"):
@@ -510,6 +676,7 @@ class WebRuntime:
             self.tasks.update(
                 task_id, title=title, status="completed", stage="已完成",
                 finished_at=time.time(), output_file=relative,
+                schedule_output_path=str(output) if relative is not None else None,
                 sections=int(result.get("sections", 0)),
                 frames=int(result.get("frames", 0)), markdown=result.get("markdown", result.get("text")),
                 error=None,
@@ -522,52 +689,70 @@ class WebRuntime:
             self.tasks.update(task_id, status="cancelled", stage="已取消", finished_at=time.time(), error=None)
         except Exception as exc:
             message = safe_logger.clean(exc)[:2000]
-            failed_stage = (self.tasks.get(task_id) or {}).get("stage", "执行中")
+            failure_stage = failed_stage((self.tasks.get(task_id) or {}).get("stage", "执行中"))
             self.tasks.update(
-                task_id, status="failed", stage="失败于：" + failed_stage, error=message,
+                task_id, status="failed", stage=failure_stage, error=message,
                 finished_at=time.time(),
             )
-            safe_logger.exception("页面任务 %s 执行失败（%s）：%s", task_id, failed_stage, message)
+            safe_logger.exception("页面任务 %s %s：%s", task_id, failure_stage, message)
             if not self.stop_event.is_set():
                 notify_local("任务执行失败", message[:180], safe_logger)
         finally:
-            finished = self.tasks.get(task_id, with_markdown=True)
-            if finished and finished.get("schedule_job_id") and finished["status"] in {"completed","failed","cancelled","interrupted"}:
-                self.store.record_run(finished["schedule_job_id"],finished["scheduled_at"],finished["status"],finished.get("error") or finished["stage"],str(settings.output_dir/finished["output_file"]) if finished.get("output_file") else None)
-            self.chat.deliver_task(finished)
-            with self.task_tokens_lock:
-                self.task_tokens.pop(task_id, None)
+            try:
+                finished = self.tasks.get(task_id, with_markdown=True)
+                # Material can be imported as soon as waiting_user is visible.
+                # An older attempt must not deliver or clean up its successor.
+                if finished and finished["attempt"] == task["attempt"]:
+                    self.chat.deliver_task(finished)
+            finally:
+                with self.task_tokens_lock:
+                    if self.task_tokens.get(task_id) is token:
+                        self.task_tokens.pop(task_id, None)
 
     def _wait_for_material(self, task, message, logger):
         try:
             session=self.site_sessions.create(task["parameters"].get("url") or task["parameters"].get("source_url"),task["id"],task.get("conversation_id"))
-            self.tasks.update(task["id"],status="waiting_user",stage="等待登录或论文 PDF",session_id=session["id"],error=message,finished_at=None)
-            notify_local("需要论文材料","请在对话中完成登录或导入 PDF。",logger)
+            if self.tasks.update(task["id"],status="waiting_user",stage="等待登录或论文 PDF",session_id=session["id"],error=message,finished_at=None):
+                notify_local("需要论文材料","请在对话中完成登录或导入 PDF。",logger)
         except Exception as exc:
             self.tasks.update(task["id"],status="failed",stage="无法创建材料获取会话",error=logger.clean(exc)[:1200],finished_at=time.time())
             logger.exception("任务 %s 无法创建材料获取会话",task["id"])
 
+    def _watch_scheduler(self) -> None:
+        try:
+            while not self.scheduler_owned and not self.stop_event.wait(POLL_SECONDS):
+                self.scheduler_owned = self.lease.acquire()
+            if self.scheduler_owned and not self.stop_event.is_set():
+                self._schedule_loop()
+        except Exception as exc:
+            self.logger.error("定时服务停止，调度初始化或恢复失败：%s", type(exc).__name__)
+        finally:
+            self.lease.release()
+            self.scheduler_owned = False
+
     def _schedule_loop(self) -> None:
-        def runner(capability: str, parameters: Dict[str, Any], cancellation=None, progress=None) -> Dict[str, Any]:
-            from agent_registry import registry as agents
-            settings = resolve_agent(self.snapshot(), agents.owner(capability).id)
-            safe_logger = SecretSafeLogger(self.logger, settings._profile_secrets + (settings.api_key,))
+        def runner(capability, parameters, cancellation, progress, settings, safe_logger):
             job_id=getattr(progress,"job_id",None);scheduled_at=getattr(progress,"scheduled_at",None)
             with self.chat._connect() as db:
                 origin=db.execute("SELECT conversation_id FROM schedule_conversations WHERE job_id=?",(job_id,)).fetchone()
             task=self.tasks.create(parameters.get("url",""),bool(parameters.get("include_frames")),settings.model,capability,parameters,get_capability(capability).title)
-            self.tasks.update(task["id"],agent_id=settings._profile_role,status="running",stage="正在执行定时任务",conversation_id=origin[0] if origin else None,schedule_job_id=job_id,scheduled_at=scheduled_at)
+            stage = "正在执行定时任务"
+            started = self.tasks.update(task["id"], execution_profile=execution_profile(settings),
+                agent_id=settings._profile_role, status="running", stage=stage,
+                conversation_id=origin[0] if origin else None, schedule_job_id=job_id, scheduled_at=scheduled_at)
+            if not started:
+                raise RunCancelled()
             task=self.tasks.get(task["id"])
-            def report(stage):
+            def report(update):
+                nonlocal stage
+                stage = safe_logger.clean(update)
                 if progress: progress(stage)
                 self.tasks.update(task["id"],stage=stage)
             try:
-                if capability=="paper_summary" and parameters.get("url") and adapter_for(parameters["url"])["id"]=="ieee":
-                    raise MaterialRequired("IEEE Xplore 需要人工登录下载 PDF，然后在原任务中导入继续。")
                 result=execute_capability(capability,parameters,settings,logger=safe_logger,cancellation=cancellation,progress=report)
                 if cancellation:cancellation.check()
                 relative=Path(result["path"]).resolve().relative_to(settings.output_dir.resolve()).as_posix() if result.get("path") else None
-                self.tasks.update(task["id"],status="completed",stage="定时任务已完成",title=result.get("title") or task["title"],output_file=relative,markdown=result.get("markdown",result.get("text")),finished_at=time.time())
+                self.tasks.update(task["id"],status="completed",stage="定时任务已完成",title=safe_logger.clean(result.get("title") or task["title"]),output_file=relative,markdown=result.get("markdown",result.get("text")),finished_at=time.time())
                 return result
             except MaterialRequired as exc:
                 self._wait_for_material(task,safe_logger.clean(exc),safe_logger)
@@ -577,16 +762,18 @@ class WebRuntime:
                 self.tasks.update(task["id"],status="cancelled",stage="定时执行已取消",finished_at=time.time())
                 raise
             except Exception as exc:
-                self.tasks.update(task["id"],status="failed",stage="定时任务执行失败",error=safe_logger.clean(exc)[:2000],finished_at=time.time())
+                self.tasks.update(task["id"],status="failed",stage=failed_stage(stage),error=safe_logger.clean(exc)[:2000],finished_at=time.time())
                 safe_logger.exception("定时功能 %s 执行失败",capability)
                 raise RuntimeError(safe_logger.clean(exc)) from None
             finally:
                 self.chat.deliver_task(self.tasks.get(task["id"],with_markdown=True))
 
-        scheduler = Scheduler(self.store, self.settings, runner, self.logger, controlled_runner=runner,executor=self.executor)
+        scheduler = Scheduler(self.store, self.settings, None, self.logger, controlled_runner=runner,
+                              executor=self.executor, settings_provider=self.snapshot)
         self.scheduler = scheduler
-        scheduler.recover_pending()
         try:
+            if not scheduler.recover_until_ready(self.stop_event, POLL_SECONDS):
+                return
             while not self.stop_event.is_set():
                 try:
                     scheduler.tick()
@@ -597,19 +784,30 @@ class WebRuntime:
         finally:
             scheduler.close()
 
-    def cancel_scheduled_run(self, run_id):
-        with self.store._connect() as db:
-            run=db.execute("SELECT job_id,scheduled_at,status FROM job_runs WHERE id=?",(run_id,)).fetchone()
-        if run and run["status"]=="waiting_user":
-            with self.tasks._connect() as db:
-                task=db.execute("SELECT id FROM ui_tasks WHERE schedule_job_id=? AND scheduled_at=? AND status='waiting_user'",(run["job_id"],run["scheduled_at"])).fetchone()
-            if task:return self.cancel_task(task[0])
-        if self.scheduler is None:
-            raise APIError(409, "定时任务由其他服务管理。")
+    def prepare_scheduled_paper(self, run_id):
+        role = capability_settings_role("paper_summary")
+        settings = resolve_agent(self.snapshot(), role)
+        task = self.tasks.prepare_scheduled_paper(run_id, settings.model, role)
         try:
-            return self.scheduler.cancel_run(run_id)
+            self.prepare_paper_session(task["id"])
+        except (ValueError, OSError) as exc:
+            safe_logger = SecretSafeLogger(self.logger, settings._profile_secrets + (settings.api_key,))
+            safe_logger.error("定时论文 %s 的登录窗口未准备好，仍可上传 PDF：%s", run_id, exc)
+        task = self.tasks.get(task["id"])
+        self.chat.deliver_task(task)
+        return task
+
+    def cancel_scheduled_run(self, run_id):
+        try:
+            run = self.scheduler.cancel_run(run_id) if self.scheduler else self.store.cancel_run(run_id)
         except ValueError as exc:
-            raise APIError(400, str(exc)) from exc
+            raise APIError(404, str(exc)) from exc
+        if not run:
+            raise APIError(404, "没有找到这次定时执行。")
+        if run["continuation_task_id"] and run["status"] in {"waiting_user", "queued", "running"}:
+            result = self.cancel_task(run["continuation_task_id"])
+            return {**result, "run_id": run_id}
+        return {"run_id": run_id, "status": run["status"]}
 
     def schedules(self) -> Dict[str, Any]:
         """Expose readable metadata while keeping scheduling independent of inputs."""
@@ -620,14 +818,14 @@ class WebRuntime:
             capability = job.get("capability") or "video_summary"
             job["capability"] = capability
             job["capability_title"] = metadata.get(capability, {}).get("title", FOLDERS.get(capability, capability))
-        runs = self.store.recent_runs()
+        runs = self.store.recent_runs(include_waiting_papers=True)
         for run in runs:
             job = by_id.get(run["job_id"], {})
             capability = run.get("capability") or job.get("capability") or "video_summary"
             run["capability"] = capability
             run["capability_title"] = metadata.get(capability, {}).get("title", FOLDERS.get(capability, capability))
             run.setdefault("parameters", job.get("parameters", {}))
-        return {"jobs": jobs, "runs": runs}
+        return {"jobs": jobs, "runs": runs, **scheduler_clock()}
 
     def create_schedule(self, body: Dict[str, Any]) -> str:
         if not isinstance(body.get("time"), str):
@@ -695,12 +893,7 @@ class WebRuntime:
             token.cancel()
         self.tasks.interrupt_pending()
         self.executor.shutdown(wait=False, cancel_futures=True)
-        if self.scheduler_thread is not None and self.scheduler_thread.is_alive():
-            self.scheduler_thread.join(timeout=1)
-        # A running media operation remains a daemon worker until process exit.
-        # Hold the process lease while it is still alive to prevent duplicate runs.
-        if self.scheduler_thread is None or not self.scheduler_thread.is_alive():
-            self.lease.release()
+        self.scheduler_thread.join(timeout=1)
 
 
 class LocalHTTPServer(ThreadingHTTPServer):
@@ -804,6 +997,13 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
         allowed = {".md", ".txt", ".html", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".pdf"} if output else {
             ".html", ".js", ".css", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".ico",
         }
+        if output and path.name == "source-evidence.json" and path.parent.name.endswith("_assets"):
+            allowed.add(".json")
+        if output and path.parent.name.endswith("_assets"):
+            if path.name == "presentation-plan.json":
+                allowed.add(".json")
+            if path.name == "presentation.pptx":
+                allowed.add(".pptx")
         if path.suffix.lower() not in allowed or not path.is_file():
             raise APIError(404, "没有找到此文件。")
         if path.stat().st_size > MAX_FILE_BYTES:
@@ -812,9 +1012,14 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
         content_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
         if path.suffix.lower() == ".md" or (output and path.suffix.lower() in {".txt", ".html"}):
             content_type = "text/plain; charset=utf-8"
+        elif output and path.name == "presentation.pptx":
+            content_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
         elif content_type.startswith("text/") or path.suffix.lower() == ".js":
             content_type += "; charset=utf-8"
-        self._headers(200, content_type, len(data), "attachment; filename=original.pdf" if output and path.suffix.lower()==".pdf" else None)
+        attachment = None
+        if output and path.suffix.lower() in {".pdf", ".pptx"}:
+            attachment = "attachment; filename=" + ("presentation.pptx" if path.suffix.lower() == ".pptx" else "original.pdf")
+        self._headers(200, content_type, len(data), attachment)
         if self.command != "HEAD":
             self.wfile.write(data)
 
@@ -840,6 +1045,8 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
     def _get(self, path: str, query: Optional[Dict[str, List[str]]] = None) -> None:
         if path == "/api/status":
             self._json(200, self.runtime.status())
+        elif path == "/api/study-log":
+            self._json(200, StudyLog(self.runtime.snapshot()).status())
         elif path == "/api/subagents":
             from agent_registry import registry as agents
             self._json(200,{"agents":[agent.metadata() for agent in agents.all()],"parallel":self.runtime.executor.status()})
@@ -924,21 +1131,21 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
         if len(data) != size:
             raise APIError(400, "PDF 上传未完成，请重试。")
         filename = urllib.parse.unquote(self.headers.get("X-File-Name", "论文.pdf"))
-        metadata = PaperUploads(self.runtime.snapshot().data_home).save(data, filename)
         if session_id:
-            session = self.runtime.site_sessions.get(session_id)
-            if session["status"] in {"cleared", "clear_pending"}:
-                raise APIError(409, "会话已退出，请重新打开登录窗口。")
-            self.runtime.site_sessions.update(session_id, "material_imported")
-            if session.get("task_id"):
-                task = self.runtime.resume_task(session["task_id"], metadata["upload_id"])
-            else:
-                task = self.runtime.create_capability_task({"capability":"paper_summary", "parameters":{"upload_id":metadata["upload_id"],"source_url":session["url"]}, "conversation_id":session.get("conversation_id")})
+            metadata, task = self.runtime.import_paper_material(session_id, data, filename)
             self._json(202, {"paper": metadata, "task": task})
             return
+        metadata = PaperUploads(self.runtime.snapshot().data_home).save(data, filename)
         self._json(201, {"paper": metadata})
 
     def _post(self, path: str, body: Dict[str, Any]) -> None:
+        if path.startswith("/api/qq/"):
+            self._json(200, self.runtime.qq.handle(path[len("/api/qq/"):], body))
+            return
+        if path in {"/api/study-log/connect", "/api/study-log/disconnect"}:
+            service = StudyLog(self.runtime.snapshot())
+            self._json(200, service.connect() if path.endswith("/connect") else service.disconnect())
+            return
         if path.startswith("/api/local-apps/"):
             parts = path[len("/api/local-apps/"):].split("/")
             if len(parts) != 2:
@@ -955,6 +1162,11 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
                 self._json(202, service.open_directory(app_id, body.get("category", "")))
             else:
                 raise APIError(404, "该应用操作尚未支持。")
+        elif path.startswith("/api/agent-profiles/") and path.endswith("/models"):
+            if body:
+                raise APIError(400, "模型查询仅使用该角色已保存的配置。")
+            role = path[len("/api/agent-profiles/"):-len("/models")]
+            self._json(200, AgentProfiles(self.runtime.snapshot()).model_catalog(role))
         elif path.startswith("/api/agent-profiles/"):
             role = path[len("/api/agent-profiles/"):]
             from agent_profiles import LOCK
@@ -985,6 +1197,10 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
             self._json(200,{"session":session})
         elif path.startswith("/api/tasks/") and path.endswith("/resume"):
             self._json(202, {"task": self.runtime.resume_task(path[len("/api/tasks/"):-len("/resume")], body.get("upload_id"))})
+        elif path.startswith("/api/tasks/") and path.endswith("/account-session"):
+            if body:
+                raise APIError(400, "请从原论文任务打开登录窗口。")
+            self._json(200, {"session": self.runtime.prepare_paper_session(path[len("/api/tasks/"):-len("/account-session")])})
         elif path == "/api/config":
             self._json(200, self.runtime.configure(body))
         elif path == "/api/chat":
@@ -1046,6 +1262,8 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
             self._json(200, self.runtime.cancel_task(path[len("/api/tasks/"):-len("/cancel")]))
         elif path == "/api/schedules":
             self._json(201, {"job_id": self.runtime.create_schedule(body)})
+        elif path.startswith("/api/schedule-runs/") and path.endswith("/material"):
+            self._json(200, {"task": self.runtime.prepare_scheduled_paper(path[len("/api/schedule-runs/"):-len("/material")])})
         elif path.startswith("/api/schedule-runs/") and path.endswith("/cancel"):
             self._json(200, self.runtime.cancel_scheduled_run(path[len("/api/schedule-runs/"):-len("/cancel")]))
         else:
@@ -1089,8 +1307,11 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
         except LocalAppError as exc:
             self._json(exc.status, {"error": str(exc), "code": exc.code,
                                     "may_have_submitted": exc.may_have_submitted})
-        except (ProfileError, SessionError) as exc:
-            self._json(exc.status, {"error": str(exc)})
+        except (ProfileError, SessionError, StudyLogError, QQError) as exc:
+            payload = {"error": str(exc)}
+            if isinstance(exc, QQError) and exc.reconnect:
+                payload["code"] = "qq_session_changed"
+            self._json(exc.status, payload)
         except PaperError as exc:
             self._json(exc.status, {"error": str(exc)})
         except KnowledgeError as exc:

@@ -4,13 +4,18 @@
   const $ = (id) => document.getElementById(id);
   const icons = (name) => `<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
   const escapeHTML = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
-  const state = { status: null, capabilities: [], agents:[], parallel:{limit:4}, tasks: [], reports: [], jobs: [], runs: [], view: 'chat', currentTask: null, currentTaskId: null, activeReport: null, historyFilter: 'all', pollTimer: null, polling: false, connected: false, submitting: false, loading: false, resultVersion: 0, resultSignature: '', resultDownloadUrl: null, exportReady: false, exporting: false, scheduleSignature: '', scheduleDrafts: {}, conversationId: null, messages: [], chatBusy: false };
+  const state = { status: null, capabilities: [], agents:[], parallel:{limit:4}, tasks: [], reports: [], jobs: [], runs: [], view: 'chat', currentTask: null, currentTaskId: null, activeReport: null, historyFilter: 'all', pollTimer: null, polling: false, connected: false, submitting: false, resultVersion: 0, resultSignature: '', resultMarkdown: '', resultDownloadUrl: null, exportReady: false, exporting: false, scheduleSignature: '', scheduleDrafts: {}, conversationId: null, messages: [], chatBusy: false };
   const activeStatuses = new Set(['queued', 'running']);
   const statusNames = { queued: '等待处理', running: '处理中', completed: '已完成', failed: '执行失败', interrupted: '已中断', waiting_user: '等待论文材料', cancelled: '已取消', missed: '已跳过', deleted: '已移入回收站' };
   Object.assign(state, {conversations: [], chatRunId: null, watchGeneration: 0, chatSources: [], conversationEdit: null});
-  Object.assign(state, {conversationScope:'active', conversationArchived:false, knowledgeJobs:[], knowledgePollTimer:null, knowledgeEntry:null, knowledgeShareSubmitting:false, knowledgeShareJobId:null, chatAttachment:null, chatUploading:false, paperSubmitting:false, resultHome:'video'});
-  const dateFormat = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
-  const fullDateFormat = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+  Object.assign(state, {conversationScope:'active', conversationArchived:false, knowledgeJobs:[], knowledgePollTimer:null, knowledgeEntry:null, knowledgeShareSubmitting:false, knowledgeShareJobId:null, chatDraft:{text:'', attachment:null}, chatUploading:null, paperSubmitting:false, resultHome:'video'});
+  const chatDrafts = new Map();
+  let conversationNavigation = Promise.resolve();
+  let conversationChoice = 0;
+  let workspaceRetryTimer = null;
+  let workspaceConversationPending = false;
+  const dateFormat = new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+  const fullDateFormat = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
 
   function formatTime(value, full = false) {
     if (!value || !Number.isFinite(Number(value))) return '—';
@@ -48,7 +53,11 @@
     try {
       const response = await fetch(path, options);
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(typeof payload.error === 'string' ? payload.error : `操作未成功（${response.status}），请稍后重试。`);
+      if (!response.ok) {
+        const error = new Error(typeof payload.error === 'string' ? payload.error : `操作未成功（${response.status}），请稍后重试。`);
+        error.status = response.status;
+        throw error;
+      }
       return payload;
     } catch (error) {
       if (error.name === 'AbortError') throw new Error(path === '/api/chat' ? 'Agent 回复超时，请先查看对话与运行记录，确认任务是否已安排。' : '本地服务响应超时，请确认服务仍在运行。');
@@ -76,8 +85,9 @@
   }
 
   function renderChatAttachment() {
-    $('chat-attachment').hidden = !state.chatAttachment;
-    $('chat-attachment-name').textContent = state.chatAttachment ? '论文附件：' + state.chatAttachment.filename : '';
+    const attachment = state.chatDraft.attachment;
+    $('chat-attachment').hidden = !attachment;
+    $('chat-attachment-name').textContent = attachment ? '论文附件：' + attachment.filename : '';
   }
 
   function updatePaperSource() {
@@ -97,18 +107,38 @@
     $('connection-error').hidden = connected;
     if (message) $('connection-error-message').textContent = message;
     updateSubmitState();
+    if (connected) clearWorkspaceRetry();
+    else scheduleWorkspaceRetry();
+  }
+
+  function clearWorkspaceRetry() {
+    clearTimeout(workspaceRetryTimer);
+    workspaceRetryTimer = null;
+  }
+
+  function scheduleWorkspaceRetry() {
+    if (state.connected || !state.status || workspaceRetryTimer !== null) return;
+    workspaceRetryTimer = setTimeout(() => {
+      workspaceRetryTimer = null;
+      refreshAll();
+    }, 5000);
+  }
+
+  function schedulerRecovering() {
+    return state.status?.scheduler_owner === 'web' && !state.status.scheduler_running;
   }
 
   function renderStatus() {
     if (!state.status) return;
     const status = state.status;
+    const main = status.conversation || status;
     const dependencies = status.dependencies || {};
+    $('schedule-timezone-help').textContent = `按${status.timezone_label || '本机系统时区'}安排。夏令时跳过的时刻不执行，重复时刻取首次。执行时使用当时保存的模型设置。`;
     const configured = Boolean(status.api_key_configured);
-    $('sidebar-provider').textContent = status.provider ? `${status.provider === 'deepseek' ? 'DeepSeek' : status.provider} 已配置` : 'DeepSeek';
-    if (!configured) $('sidebar-provider').textContent = '等待连接模型';
-    $('sidebar-model').textContent = status.model || '尚未选择模型';
-    $('model-dot').className = `status-dot ${configured ? 'is-ready' : 'is-warning'}`;
-    $('composer-model').textContent = status.model || '尚未选择模型';
+    $('sidebar-provider').textContent = main.api_key_configured ? `${main.provider === 'deepseek' ? 'DeepSeek' : main.provider || '模型'} 已配置` : '等待连接模型';
+    $('sidebar-model').textContent = main.model || '尚未选择模型';
+    $('model-dot').className = `status-dot ${main.api_key_configured ? 'is-ready' : 'is-warning'}`;
+    $('composer-model').textContent = main.model || '尚未选择模型';
     $('api-endpoint').textContent = status.base_url || 'https://api.deepseek.com';
     $('key-status').className = `status-pill ${configured ? 'is-success' : 'is-warning'}`;
     $('key-status').textContent = configured ? '已配置凭证' : '待配置';
@@ -132,14 +162,17 @@
       $('setup-notice-title').textContent = '还需要准备视频读取工具';
       $('setup-notice-detail').textContent = '当前设备缺少视频读取工具，请在本地准备 yt-dlp 后刷新页面。';
     }
-    $('scheduler-status').textContent = status.scheduler_running ? '本地定时服务正在运行' : '本地定时服务尚未运行';
+    const schedulerRecoveringNow = schedulerRecovering();
+    $('scheduler-status').textContent = schedulerRecoveringNow ? '本地定时服务正在恢复' :
+      status.scheduler_running ? '本地定时服务正在运行' : '本地定时服务尚未运行';
     const dependencyRows = [
       { name: '论文 PDF 读取', description: '提取论文文字，扫描版暂不支持 OCR', ready: dependencies.paper_pdf, missing: '缺少 pypdf' },
+      { name: '论文组会 PPT', description: '可编辑演示文稿与来源附件', ready: dependencies.paper_presentation, missing: '渲染环境未就绪' },
       { name: '视频内容读取', description: '用于读取平台字幕与媒体', ready: dependencies.yt_dlp, missing: '缺少 yt-dlp' },
       { name: 'YouTube 平台支持', description: '用于解析 YouTube 视频内容', ready: dependencies.javascript_runtime, missing: '尚未准备运行时' },
       { name: '关键画面提取', description: '用于提取视频原图', ready: dependencies.ffmpeg, missing: '缺少 FFmpeg' },
       { name: '无字幕转录', description: status.dependency_errors?.asr || '字幕不可用时的后备方案', ready: dependencies.asr, missing: '尚未准备 ASR' },
-      { name: '定时任务服务', description: '电脑与服务运行时执行', ready: status.scheduler_running, missing: '未运行' },
+      { name: '定时任务服务', description: '电脑与服务运行时执行', ready: status.scheduler_running, missing: schedulerRecoveringNow ? '正在恢复' : '未运行' },
     ];
     $('dependency-list').innerHTML = dependencyRows.map((item) => `<div class="dependency-row"><div><strong>${escapeHTML(item.name)}</strong><small>${escapeHTML(item.description)}</small></div><span class="status-pill ${item.ready ? 'is-success' : 'is-warning'}">${escapeHTML(item.ready ? '已就绪' : item.missing)}</span></div>`).join('');
     updateSubmitState();
@@ -153,19 +186,21 @@
     $('settings-submit').disabled = !state.connected;
     $('paper-submit').disabled = !state.connected || state.paperSubmitting;
     $('paper-submit').querySelector('span').textContent = state.paperSubmitting ? '正在提交…' : '生成论文笔记';
-    $('chat-attach').disabled = !state.connected || state.chatBusy || state.chatUploading || state.conversationArchived;
+    const chatBusy = state.chatBusy || Boolean(state.chatDraft.sending && state.chatDraft.sending === state.status?.csrf_token);
+    $('chat-attach').disabled = !state.connected || chatBusy || state.chatUploading || state.conversationArchived;
     $('chat-attach').textContent = state.chatUploading ? '正在上传…' : '附加论文 PDF';
-    $('chat-attachment-remove').disabled = state.chatBusy;
-    $('chat-submit').disabled = !state.connected || !state.status?.api_key_configured || state.chatBusy || state.chatUploading || state.conversationArchived;
+    $('chat-attachment-remove').disabled = chatBusy;
+    const mainConfigured = (state.status?.conversation || state.status)?.api_key_configured;
+    $('chat-submit').disabled = !state.connected || !mainConfigured || chatBusy || state.chatUploading || state.conversationArchived;
     $('chat-input').disabled = state.conversationArchived;
-    $('chat-submit').querySelector('span').textContent = state.chatBusy ? '正在处理…' : '发送';
+    $('chat-submit').querySelector('span').textContent = chatBusy ? '正在处理…' : '发送';
     $('chat-new').disabled = !state.connected;
-    $('chat-busy').hidden = !state.chatBusy;
-    $('chat-stop').hidden = !state.chatBusy;
-    $('chat-retry').disabled = state.chatBusy || state.conversationArchived || !state.messages.some(message => message.role === 'user');
-    $('conversation-delete').disabled = state.chatBusy || !state.conversationId;
+    $('chat-busy').hidden = !chatBusy;
+    $('chat-stop').hidden = !state.chatRunId || !state.chatBusy;
+    $('chat-retry').disabled = chatBusy || state.conversationArchived || !state.messages.some(message => message.role === 'user');
+    $('conversation-delete').disabled = chatBusy || !state.conversationId;
     $('conversation-rename').disabled = !state.conversationId;
-    $('conversation-archive').disabled = state.chatBusy || !state.conversationId;
+    $('conversation-archive').disabled = chatBusy || !state.conversationId;
     $('conversation-archive').hidden = state.conversationArchived;
     $('conversation-unarchive').hidden = !state.conversationArchived;
   }
@@ -282,6 +317,17 @@
   }
   function renderCapabilities() {
     state.capabilities=state.capabilities.filter(item=>item.id!=='web_research');
+    const category = $('library-category');
+    const selectedCategory = category.value;
+    category.querySelectorAll('[data-registered-capability]').forEach(option => option.remove());
+    const existingCategories = new Set(Array.from(category.options, option => option.value));
+    for (const capability of state.capabilities) {
+      if (existingCategories.has(capability.id)) continue;
+      const option = new Option(capability.title || capability.id, capability.id);
+      option.dataset.registeredCapability = '';
+      category.add(option);
+    }
+    if (Array.from(category.options).some(option => option.value === selectedCategory)) category.value = selectedCategory;
     const previous = $('schedule-capability').value;
     rememberScheduleDraft();
     $('schedule-capability').replaceChildren(...state.capabilities.map((capability) => {
@@ -323,7 +369,7 @@
     return parameters;
   }
 
-  function chatMarkdown(text) {
+  function chatMarkdown(text, baseUrl) {
     const template = document.createElement('template');
     if (!window.marked || !window.DOMPurify) { template.content.append(document.createTextNode(text)); return template.content; }
     try {
@@ -334,13 +380,16 @@
         ALLOWED_ATTR:['href','src','alt','title','class','start'], ALLOW_DATA_ATTR:false});
       for (const link of template.content.querySelectorAll('a')) {
         try {
-          const url = new URL(link.getAttribute('href'), location.origin);
+          const url = new URL(link.getAttribute('href'), new URL(baseUrl || '/', location.origin));
           if (!['https:','http:'].includes(url.protocol)) throw new Error();
           link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer';
         } catch { link.replaceWith(document.createTextNode(link.textContent || '')); }
       }
       for (const img of template.content.querySelectorAll('img')) {
-        const safe = outputUrl(img.getAttribute('src'));
+        let safe = null;
+        try {
+          safe = outputUrl(new URL(img.getAttribute('src'), new URL(baseUrl || '/outputs/', location.origin)).href);
+        } catch {}
         if (!safe || !/\.(png|jpe?g|webp|gif)$/i.test(new URL(safe, location.origin).pathname)) img.replaceWith(document.createTextNode(img.alt || '[图片不可用]'));
         else { img.src = safe; img.loading = 'lazy'; }
       }
@@ -396,9 +445,17 @@
     if (!state.knowledgeJobs.some(job=>activeStatuses.has(job.status)) || state.knowledgePollTimer) return;
     state.knowledgePollTimer = setTimeout(async()=>{
       state.knowledgePollTimer=null;
-      await Promise.allSettled([refreshKnowledge(), refreshConversations(), state.chatBusy ? Promise.resolve() : refreshConversation()]);
+      await Promise.allSettled([refreshKnowledgeContext()]);
       ensureKnowledgePolling();
     },2500);
+  }
+
+  async function refreshKnowledgeContext() {
+    await Promise.all([refreshKnowledge(), refreshConversations()]);
+    // A fast job may already be terminal when the job list arrives. Read the
+    // selected conversation afterwards so its status cannot remain queued
+    // when no active job is left to schedule another poll.
+    if (!state.chatBusy) await refreshConversation();
   }
 
   function sharedConversationURL(value) {
@@ -502,20 +559,51 @@
   }
 
   async function submitChat(message, retry=false) {
-    if(!retry&&message.trim().startsWith('/')){try{if(await AgentConsole.command(message)){$('chat-input').value='';return;}}catch(error){inlineError('chat-error',error.message);return;}}
-    if (state.chatBusy) return;
-    inlineError('chat-error');
-    state.chatBusy = true; updateSubmitState();
+    const input = $('chat-input');
+    const draft = state.chatDraft;
     const conversationId = state.conversationId;
+    const session = state.status?.csrf_token;
+    if (!retry && message.trim().startsWith('/')) {
+      try {
+        if (await AgentConsole.command(message)) {
+          if (draft === state.chatDraft && input.value.trim() === message) input.value = '';
+          return;
+        }
+      } catch (error) {
+        if (draft === state.chatDraft) inlineError('chat-error', error.message);
+        return;
+      }
+    }
+    if (state.chatBusy || !session || draft.sending === session) return;
+    inlineError('chat-error');
+    draft.sending = session;
+    draft.text = input.value;
+    const attachment = draft.attachment;
+    state.chatBusy = true; updateSubmitState();
+    const generation = state.watchGeneration;
+    const isCurrent = () => state.status?.csrf_token === session && state.watchGeneration === generation;
     try {
-      const response = await api('/api/chat/start', 'POST', {message,conversation_id:conversationId,retry,web_enabled:$('chat-web').checked,attachments:!retry && state.chatAttachment ? [state.chatAttachment.upload_id] : []});
-      if(!retry){state.chatAttachment=null;renderChatAttachment();}
-      if (state.conversationId !== conversationId) return;
-      if (!retry && $('chat-input').value.trim() === message) $('chat-input').value = '';
+      const response = await api('/api/chat/start', 'POST', {message,conversation_id:conversationId,retry,web_enabled:$('chat-web').checked,attachments:!retry && attachment ? [attachment.upload_id] : []});
+      if (!retry && state.status?.csrf_token === session) {
+        if (draft === state.chatDraft) draft.text = input.value;
+        if (draft.text.trim() === message) draft.text = '';
+        if (draft.attachment === attachment) draft.attachment = null;
+        if (draft === state.chatDraft) {
+          if (input.value !== draft.text) input.value = draft.text;
+          renderChatAttachment();
+        }
+      }
+      if (!isCurrent()) return;
       applyConversation(response.conversation);
       if (!response.conversation.active_run) watchRun(response.run_id);
       refreshConversations().catch(error => toast(error.message, true));
-    } catch (error) { inlineError('chat-error', error.message); state.chatBusy = false; updateSubmitState(); }
+    } catch (error) {
+      if (!isCurrent()) return;
+      inlineError('chat-error', error.message); state.chatBusy = false; updateSubmitState();
+    } finally {
+      if (draft.sending === session) draft.sending = null;
+      if (draft === state.chatDraft) updateSubmitState();
+    }
   }
 
   function activityLabel(name) {
@@ -527,6 +615,7 @@
       import_shared_conversation: '整理聊天分享', read_knowledge_job: '查看知识整理进度', list_knowledge_jobs: '查看知识整理任务',
       update_personal_knowledge: '更新知识', delete_personal_knowledge: '整理知识库', restore_personal_knowledge: '恢复知识',
       list_generated_texts: '查询内容库', read_generated_text: '阅读文档', save_generated_text: '保存文档',
+      read_study_log: '读取学习记录', create_study_report: '生成学习周报',
       delete_generated_texts: '整理内容库', list_deleted_texts: '查看回收站', restore_generated_texts: '恢复文档',
       list_scheduled_tasks: '查看定时任务', disable_scheduled_task: '停用定时任务',
       show_agent_settings: '打开 Agent 设置', list_agent_configurations: '查看 Agent 配置', update_agent_configuration: '更新 Agent 配置',
@@ -546,7 +635,8 @@
       try {
         const url = new URL(source.url);
         if (!['http:', 'https:'].includes(url.protocol)) continue;
-        const key = `${source.kind === 'page' ? 'page' : 'search'}:${url.href}`;
+        const failureStart = source.kind === 'read_failed' ? source.start_char || 0 : '';
+        const key = `${source.kind || 'search_result'}:${url.href}:${failureStart}`;
         if (seenSources.has(key)) continue;
         seenSources.add(key);
         sources.push({...source, url});
@@ -592,11 +682,15 @@
       details.dataset.messageDisclosure = `${disclosureKey}:sources`;
       details.open = openDisclosures.has(details.dataset.messageDisclosure);
       const pages = sources.filter(source => source.kind === 'page');
-      const leads = sources.filter(source => source.kind !== 'page');
+      const continuationFailures = sources.filter(source => source.kind === 'read_failed' && source.start_char > 0);
+      const failed = sources.filter(source => source.kind === 'read_failed' && !(source.start_char > 0));
+      const leads = sources.filter(source => source.kind !== 'page' && source.kind !== 'read_failed');
       const summary = document.createElement('summary');
-      summary.textContent = '资料来源 · ' + [pages.length && `已阅读 ${pages.length}`, leads.length && `搜索线索 ${leads.length}`].filter(Boolean).join(' / ');
+      summary.textContent = '资料来源 · ' + [pages.length && `已阅读 ${pages.length}`, leads.length && `搜索线索 ${leads.length}`,
+        continuationFailures.length && `续读未成功 ${continuationFailures.length}`, failed.length && `读取未成功 ${failed.length}`].filter(Boolean).join(' / ');
       details.append(summary);
-      for (const [label, items] of [['已阅读的资料', pages], ['搜索线索', leads]]) {
+      for (const [label, items] of [['已阅读的资料', pages], ['搜索线索', leads],
+        ['正文续读未成功', continuationFailures], ['网页读取未成功', failed]]) {
         if (!items.length) continue;
         const section = document.createElement('section');
         section.className = 'message-source-group';
@@ -611,7 +705,12 @@
           const title = document.createElement('span');
           title.className = 'source-link-title'; title.textContent = source.title || source.url.hostname;
           const host = document.createElement('small');
-          host.className = 'source-link-host'; host.textContent = source.url.hostname;
+          const ranges = Array.isArray(source.read_ranges) ? source.read_ranges.map(([start, end]) => `${start + 1}–${end}`).join('、') : '';
+          const failedOffset = source.kind === 'read_failed' && source.start_char > 0 ? `从第 ${source.start_char + 1} 个字符续读` : '';
+          host.className = 'source-link-host'; host.textContent = [source.url.hostname,
+            source.truncated && (source.read_chars ? `正文节选 · ${source.read_chars}/${source.available_chars} 字符` : '正文节选'),
+            source.truncated && ranges ? `已读区间 ${ranges}` : '', failedOffset,
+            source.reason].filter(Boolean).join(' · ');
           link.append(title, host); list.append(link);
         }
         section.append(heading, list); details.append(section);
@@ -640,7 +739,7 @@
       label.textContent = message.role === 'user' ? '你' : 'Agent';
       const content = document.createElement('div');
       content.className = 'chat-message-content' + (message.role === 'assistant' ? ' markdown-content' : '');
-      if (message.role === 'assistant') content.append(chatMarkdown(message.content || ''));
+      if (message.role === 'assistant') content.append(chatMarkdown(message.content || '', outputUrl(message.source_file)));
       else content.textContent = message.content || '';
       article.append(label, content);
       if (message.status && message.status !== 'completed') {
@@ -667,7 +766,7 @@
           button.type = 'button';
           button.className = 'button button-secondary button-small';
           const title = action.title || capabilityInfo(action.capability)?.title || '任务';
-          if(action.type==='agent_settings'){button.dataset.agentSettings=action.role||'global';button.textContent='配置 Agent';}
+          if(action.type==='agent_settings'){button.dataset.agentSettings=action.role||'conversation';button.textContent='配置 Agent';}
           else if(action.type==='workspace_panel'){button.dataset.workspacePanel=action.panel;button.textContent=action.title||'打开操作';}
           else if(action.type==='account_session'){button.dataset.accountSession=action.session_id;button.textContent='账号与论文材料';}
           else if (action.type === 'knowledge' && action.entry_id) {
@@ -675,7 +774,8 @@
           } else if (action.type === 'task' && action.task_id) {
             button.dataset.openTask = action.task_id;
             const task = state.tasks.find((item) => item.id === action.task_id);
-            button.textContent = `${title} · ${task ? statusNames[task.status] || task.status : '查看进度'}`;
+            const status = task?.status || action.task_status;
+            button.textContent = `${title} · ${statusNames[status] || status || '查看进度'}`;
           } else if (action.type === 'schedule' && action.job_id) {
             button.dataset.go = 'schedules';
             button.textContent = `${title} · 查看定时任务`;
@@ -708,9 +808,20 @@
   }
   function applyConversation(data) {
     state.watchGeneration += 1;
-    if(state.conversationId && state.conversationId!==data.conversation_id){state.chatAttachment=null;renderChatAttachment();}
+    const nextId = data.conversation_id || null;
+    if (state.conversationId && state.conversationId !== nextId) {
+      const input = $('chat-input');
+      const draft = state.chatDraft;
+      draft.text = input.value;
+      if (draft.text || draft.attachment || draft.sending) chatDrafts.set(state.conversationId, draft);
+      else chatDrafts.delete(state.conversationId);
+      state.chatDraft = chatDrafts.get(nextId) || {text:'', attachment:null};
+      input.value = state.chatDraft.text;
+      state.chatUploading = null;
+      renderChatAttachment();
+    }
     const changed=state.conversationId!==data.conversation_id || state.conversationArchived!==Boolean(data.archived_at);
-    state.conversationId = data.conversation_id || null;
+    state.conversationId = nextId;
     state.conversationArchived=Boolean(data.archived_at);
     if(changed)state.conversationScope=state.conversationArchived?'archived':'active';
     state.messages = Array.isArray(data.messages) ? data.messages : [];
@@ -723,10 +834,74 @@
     updateSubmitState();
     if (data.active_run) watchRun(data.active_run.id, data.active_run.partial || '');
   }
+  async function readSelectedConversation() {
+    const id = state.conversationId;
+    if (id) {
+      try {
+        return await api('/api/conversations/' + encodeURIComponent(id));
+      } catch (error) {
+        if (error.status !== 404) throw error;
+      }
+    }
+    return api('/api/conversations/current');
+  }
+
+  function navigateConversation(conversationId = null) {
+    const choice = ++conversationChoice;
+    const session = state.status?.csrf_token;
+    const view = state.view;
+    const isCurrent = () => conversationChoice === choice && state.status?.csrf_token === session;
+    const path = conversationId ? `/api/conversations/${encodeURIComponent(conversationId)}/select` : '/api/conversations/new';
+
+    // These requests also update the saved selection. Send them in click order
+    // and skip any queued choice the user has already replaced.
+    conversationNavigation = conversationNavigation.then(async () => {
+      if (!isCurrent()) return;
+      try {
+        const data = await api(path, 'POST', {});
+        if (!conversationId && state.status?.csrf_token === session) {
+          refreshConversations().catch(error => toast(error.message, true));
+        }
+        if (!isCurrent()) return;
+        applyConversation(data);
+        inlineError('chat-error');
+        if ($('knowledge-dialog').open) $('knowledge-dialog').close();
+        if (state.view === view) {
+          await setView('chat', false);
+          if (!conversationId && isCurrent()) $('chat-input').focus({preventScroll:true});
+        }
+      } catch (error) {
+        if (!isCurrent()) return;
+        if (conversationId) toast(error.message, true);
+        else inlineError('chat-error', error.message);
+      }
+    });
+    return conversationNavigation;
+  }
+
   async function refreshConversation() {
     if (state.chatBusy) return;
-    const data = await api('/api/conversations/current');
-    if (!state.chatBusy) applyConversation(data);
+    const generation = state.watchGeneration;
+    const data = await readSelectedConversation();
+    if (generation === state.watchGeneration && !state.chatBusy) applyRefreshedConversation(data);
+  }
+
+  function applyRefreshedConversation(data) {
+    const previousId = state.conversationId;
+    const selectionLost = previousId && previousId !== data.conversation_id;
+    const input = $('chat-input');
+    const draft = selectionLost ? input.value : '';
+    applyConversation(data);
+    if (selectionLost) {
+      chatDrafts.delete(previousId);
+      const message = '原对话已被删除，已切换到当前对话。';
+      if (draft.trim() && !input.value && !state.chatDraft.attachment) {
+        input.value = draft;
+        inlineError('chat-error', message + '原草稿已放入输入框，请核对发送目标。');
+      } else {
+        inlineError('chat-error', draft.trim() ? message + '原对话未发送的文字：' + draft : message);
+      }
+    }
   }
 
   async function refreshLibrary() {
@@ -751,7 +926,7 @@
   async function openArtifact(id) {
     const { artifact } = await api(`/api/artifacts/${encodeURIComponent(id)}`);
     if (!artifact) throw new Error('内容已不存在，请刷新内容库。');
-    await openReport({url: artifact.url, title: artifact.title, modified_at: artifact.modified_at});
+    await openReport(artifact);
   }
 
   function renderReports() {
@@ -781,12 +956,23 @@
     if (!task) return;
     const isActive = activeStatuses.has(task.status);
     const failed = ['failed', 'interrupted'].includes(task.status);
+    const cancelled = task.status === 'cancelled';
     const elapsed = Math.max(0, Math.floor(((task.finished_at || Date.now() / 1000) - Number(task.created_at))));
     const elapsedText = Number.isFinite(elapsed) ? elapsed < 60 ? `${elapsed} 秒` : `${Math.floor(elapsed / 60)} 分 ${elapsed % 60} 秒` : '';
-    const title = task.status==='waiting_user'?'等待论文材料':isActive ? '正在处理'+capabilityTitle(task) : task.status === 'completed' ? '这份笔记，已经整理好了' : task.status === 'interrupted' ? '任务已中断' : '这次整理没有完成';
-    const description = isActive ? '可切换页面，任务会继续处理。' : task.status === 'completed' ? `${Number(task.sections) || 0} 个内容分段${paper?'':' · '+(Number(task.frames)||0)+' 张关键画面'}` : task.error || '请查看本地运行情况后重试。';
+    const title = isActive ? '正在处理' + capabilityTitle(task) : ({
+      waiting_user: '等待论文材料', completed: '这份笔记，已经整理好了', interrupted: '任务已中断', cancelled: '任务已取消',
+    }[task.status] || '这次整理没有完成');
+    const description = isActive ? '可切换页面，任务会继续处理。'
+      : task.status === 'completed' ? `${Number(task.sections) || 0} 个内容分段${paper ? '' : ` · ${Number(task.frames) || 0} 张关键画面`}`
+      : cancelled ? '' : task.error || '请查看本地运行情况后重试。';
+    const canCancel = state.connected && (isActive || task.status === 'waiting_user');
     card.className = `card progress-card${failed ? ' is-failed' : ''}`;
-    card.innerHTML = `<div class="progress-icon">${isActive ? '<span class="spinner" aria-hidden="true"></span>' : icons(failed ? 'alert' : 'check')}</div><div class="progress-content"><div class="progress-topline"><strong>${escapeHTML(title)}</strong><span class="progress-time">${escapeHTML(elapsedText)}</span></div><p>${escapeHTML(description)}</p>${isActive ? `<p class="progress-detail">${escapeHTML(task.stage || statusNames[task.status])}</p>` : ''}${failed ? '<button class="text-button" data-retry-task>重新填写并尝试 ' + icons('arrow') + '</button>' : ''}</div>`;
+    card.innerHTML = `<div class="progress-icon">${isActive ? '<span class="spinner" aria-hidden="true"></span>' : icons(cancelled ? 'close' : failed ? 'alert' : 'check')}</div>
+      <div class="progress-content"><div class="progress-topline"><strong>${escapeHTML(title)}</strong><span class="progress-time">${escapeHTML(elapsedText)}</span></div>
+      ${description ? `<p>${escapeHTML(description)}</p>` : ''}
+      ${isActive || (failed && task.stage && task.stage !== description) ? `<p class="progress-detail">${escapeHTML(task.stage || statusNames[task.status])}</p>` : ''}
+      ${canCancel ? `<button type="button" class="text-button" data-cancel-task="${escapeHTML(task.id)}">取消任务</button>` : ''}
+      ${failed ? '<button class="text-button" data-retry-task>重新填写并尝试 ' + icons('arrow') + '</button>' : ''}</div>`;
     if(paper&&['waiting_user','failed','interrupted'].includes(task.status))card.querySelector('.progress-content').insertAdjacentHTML('beforeend',`${task.session_id?`<button type="button" class="text-button" data-account-session="${escapeHTML(task.session_id)}">登录并获取论文</button>`:''}<button type="button" class="text-button" data-task-material="${escapeHTML(task.id)}">上传 PDF 继续原任务</button>`);
   }
 
@@ -806,9 +992,12 @@
     } catch { return null; }
   }
 
-  async function renderMarkdown(markdown, baseUrl) {
-    const version = ++state.resultVersion;
-    const container = $('result-body');
+  const markdownRenderVersions = new WeakMap();
+  async function renderMarkdown(markdown, baseUrl, container = $('result-body')) {
+    const version = (markdownRenderVersions.get(container) || 0) + 1;
+    markdownRenderVersions.set(container, version);
+    const isCurrent = () => markdownRenderVersions.get(container) === version;
+    if (container === $('result-body')) state.resultVersion += 1;
     container.replaceChildren();
     if (!window.marked || !window.DOMPurify) {
       const notice = document.createElement('p');
@@ -832,14 +1021,22 @@
       });
       const template = document.createElement('template');
       template.innerHTML = sanitized;
+      const reportUrl = outputUrl(baseUrl);
+      const presentationUrl = reportUrl && /\.md$/i.test(reportUrl)
+        ? reportUrl.replace(/\.md$/i, '_assets/presentation.pptx') : null;
       for (const link of template.content.querySelectorAll('a')) {
         try {
           const href = link.getAttribute('href') || '';
           const url = new URL(href, new URL(baseUrl || '/outputs/', location.origin));
           if (!['https:', 'http:'].includes(url.protocol)) throw new Error('Unsupported link');
           link.href = url.href;
-          link.target = '_blank';
-          link.rel = 'noopener noreferrer';
+          const localPath = presentationUrl && outputUrl(url.href);
+          if (localPath && decodeURIComponent(localPath) === decodeURIComponent(presentationUrl)) {
+            link.download = 'presentation.pptx';
+          } else {
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+          }
         } catch {
           link.replaceWith(document.createTextNode(link.textContent || ''));
         }
@@ -860,15 +1057,15 @@
           img.replaceWith(note);
         }
       }
-      if (version !== state.resultVersion) return;
+      if (!isCurrent()) return;
       container.append(template.content);
       if (window.mermaid) {
         window.mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true, theme: 'base', themeVariables: { fontFamily: '-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif', fontSize: '13px', primaryColor: '#edf3e7', primaryTextColor: '#4d6844', primaryBorderColor: '#b7caa5', lineColor: '#9bb789', secondaryColor: '#f6f8f0', tertiaryColor: '#ffffff' } });
         const diagrams = [];
         for (const code of container.querySelectorAll('pre > code.language-mermaid')) {
-          // Diagrams stay self-contained; custom directives, HTML and image URLs
-          // are retained as code rather than allowed to request remote resources.
-          const source = code.textContent || '';
+          // Treat bare label line breaks as spaces. Other HTML, directives, and
+          // resource URLs remain in the original code block.
+          const source = (code.textContent || '').replace(/[ \t]*<br[ \t]*\/?>[ \t]*/gi, ' ');
           if (/https?:|ftp:|file:|data:|javascript:|url\s*\(|\bimg\s*:|%%\{|^\s*---|</i.test(source)) continue;
           const original = code.parentElement;
           const diagram = document.createElement('div');
@@ -879,15 +1076,17 @@
         }
         for (const { diagram, original } of diagrams) {
           try {
-            if (version !== state.resultVersion) return;
+            if (!isCurrent()) return;
             await window.mermaid.run({ nodes: [diagram] });
           } catch {
+            if (!isCurrent()) return;
             if (diagram.isConnected) diagram.replaceWith(original);
           }
         }
       }
-      return true;
+      return isCurrent();
     } catch {
+      if (!isCurrent()) return;
       container.replaceChildren();
       const pre = document.createElement('pre');
       pre.className = 'plain-markdown';
@@ -918,10 +1117,16 @@
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result);
-      reader.onerror = () => reject(new Error('图片读取失败，请重试下载。'));
-      reader.onabort = () => reject(new Error('图片读取已中止，请重试下载。'));
+      reader.onerror = () => reject(new Error('笔记资源读取失败，请重试下载。'));
+      reader.onabort = () => reject(new Error('笔记资源读取已中止，请重试下载。'));
       reader.readAsDataURL(blob);
     });
+  }
+
+  async function readSavedReport(url, signal) {
+    const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store', signal });
+    if (!response.ok) throw new Error('未能读取笔记文件，请刷新后重试。');
+    return response.text();
   }
 
   async function downloadOfflineNote() {
@@ -929,31 +1134,62 @@
     const signature = state.resultSignature;
     const downloadUrl = state.resultDownloadUrl;
     const title = $('result-title').textContent || '视频笔记';
-    const note = $('result-body').cloneNode(true);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 45000);
     let totalBytes = 0;
     state.exporting = true;
     updateDownloadState();
     try {
+      let version = state.resultVersion;
+      const latestMarkdown = await readSavedReport(downloadUrl, controller.signal);
+      if (signature !== state.resultSignature || version !== state.resultVersion) throw new Error('当前笔记已切换，请重新下载。');
+      if (latestMarkdown !== state.resultMarkdown) {
+        await showResult(latestMarkdown, title, $('result-meta').textContent, downloadUrl, signature);
+        if (signature !== state.resultSignature || state.resultMarkdown !== latestMarkdown || !state.exportReady) {
+          throw new Error('当前笔记已切换或无法重新渲染，请重新下载。');
+        }
+        version = state.resultVersion;
+      }
+      const note = $('result-body').cloneNode(true);
+      const embedResource = async (url, mediaType, errorMessage) => {
+        const response = await fetch(url, { signal: controller.signal, credentials: 'same-origin', cache: 'no-store' });
+        if (!response.ok) throw new Error(errorMessage);
+        const blob = await response.blob();
+        if (!mediaType.test(blob.type.split(';')[0])) throw new Error(errorMessage);
+        totalBytes += blob.size;
+        if (blob.size > 32 * 1024 * 1024 || totalBytes > 64 * 1024 * 1024) throw new Error('笔记资源过大，请下载 Markdown 压缩包。');
+        return blobDataUrl(blob);
+      };
       // Copy the rendered note so diagrams remain visible without scripts.
-      // Local images are embedded; the saved document needs no running server.
       await Promise.all([...note.querySelectorAll('img')].map(async (img) => {
         const url = outputUrl(img.getAttribute('src') || '');
         if (!url) throw new Error('图片路径无效，请重新打开笔记后下载。');
-        const response = await fetch(url, { signal: controller.signal, credentials: 'same-origin', cache: 'no-store' });
-        if (!response.ok) throw new Error('部分图片无法读取，请检查原图是否仍在本机。');
-        const blob = await response.blob();
-        if (!/^image\/(png|jpeg|webp|gif)$/i.test(blob.type)) throw new Error('图片格式无效，无法完成下载。');
-        totalBytes += blob.size;
-        if (blob.size > 32 * 1024 * 1024 || totalBytes > 64 * 1024 * 1024) throw new Error('图片总量过大，请下载 Markdown 压缩包。');
-        img.src = await blobDataUrl(blob);
+        img.src = await embedResource(url, /^image\/(png|jpeg|webp|gif)$/i, '图片无法读取，请检查原图是否仍在本机。');
         img.removeAttribute('srcset');
         img.removeAttribute('loading');
         img.removeAttribute('decoding');
         img.removeAttribute('referrerpolicy');
       }));
-      if (signature !== state.resultSignature) throw new Error('当前笔记已切换，请重新下载。');
+      // Package only known companion files linked by this report.
+      const assetDirectory = downloadUrl.replace(/\.md$/i, '') + '_assets/';
+      const localLinks = [...note.querySelectorAll('a[href]')];
+      for (const [name, mediaType] of [['original.pdf', /^application\/pdf$/i], ['source-evidence.json', /^application\/json$/i],
+          ['presentation-plan.json', /^application\/json$/i],
+          ['presentation.pptx', /^application\/vnd\.openxmlformats-officedocument\.presentationml\.presentation$/i]]) {
+        const url = assetDirectory + name;
+        const references = localLinks.filter((link) => {
+          const path = outputUrl(link.getAttribute('href'));
+          return path && decodeURIComponent(path) === decodeURIComponent(url);
+        });
+        if (!references.length) continue;
+        const dataUrl = await embedResource(url, mediaType, '笔记附件无法读取，请检查文件是否仍在本机。');
+        for (const link of references) {
+          link.href = dataUrl;
+          link.download = name;
+          link.removeAttribute('target');
+        }
+      }
+      if (signature !== state.resultSignature || version !== state.resultVersion) throw new Error('当前笔记已切换，请重新下载。');
       for (const element of note.querySelectorAll('script,iframe,object,embed,form')) element.remove();
       for (const element of note.querySelectorAll('*')) {
         for (const attribute of [...element.attributes]) {
@@ -984,8 +1220,10 @@
   }
 
   async function showResult(markdown, title, metadata, download, signature) {
-    if (state.resultSignature === signature) return;
+    const body = String(markdown || '');
+    if (state.resultSignature === signature && state.resultMarkdown === body) return;
     state.resultSignature = signature;
+    state.resultMarkdown = body;
     $('result-title').textContent = title || '视频笔记';
     $('result-meta').textContent = metadata || '';
     const safeUrl = outputUrl(download);
@@ -1000,35 +1238,85 @@
       $('result-download-bundle').download = decodeURIComponent(safeUrl.split('/').pop() || '视频笔记.md').replace(/\.md$/i, '') + '.zip';
     } else $('result-download-bundle').removeAttribute('href');
     $('result-card').hidden = false;
-    const ready = await renderMarkdown(String(markdown || ''), safeUrl);
-    if (signature === state.resultSignature) {
+    const rendering = renderMarkdown(body, safeUrl);
+    const version = state.resultVersion;
+    const ready = await rendering;
+    if (signature === state.resultSignature && version === state.resultVersion) {
       state.exportReady = Boolean(ready && safeUrl);
       updateDownloadState();
     }
   }
 
+  let genericResultDialog = null;
+  async function showGenericResult(markdown, title, metadata, download) {
+    // Polling or closing this preview leaves the specialized result card in its page.
+    if (!genericResultDialog) {
+      genericResultDialog = document.createElement('dialog');
+      genericResultDialog.className = 'result-dialog';
+      genericResultDialog.setAttribute('aria-labelledby', 'generic-result-title');
+      genericResultDialog.innerHTML = `<div class="result-dialog-toolbar"><strong>生成内容</strong><button type="button" class="icon-button" aria-label="关闭内容预览" data-close-generic-result>${icons('close')}</button></div><section class="card result-card"><div class="result-header"><div class="result-heading"><h2 id="generic-result-title"></h2><p data-generic-meta></p></div><div class="result-downloads"><a class="button button-primary" data-generic-download download>下载 Markdown</a><a class="text-button" data-generic-bundle download>下载 Markdown 压缩包</a></div></div><p class="result-download-help">文档已自动保存在本机，下载会另存一份副本。</p><div class="markdown-content" data-generic-body></div></section>`;
+      document.body.append(genericResultDialog);
+      genericResultDialog.querySelector('[data-close-generic-result]').addEventListener('click', () => genericResultDialog.close());
+      genericResultDialog.addEventListener('close', () => {
+        if (genericResultDialog.open) return;
+        const body = genericResultDialog.querySelector('[data-generic-body]');
+        markdownRenderVersions.set(body, (markdownRenderVersions.get(body) || 0) + 1);
+        body.replaceChildren();
+        for (const link of genericResultDialog.querySelectorAll('[data-generic-download], [data-generic-bundle]')) link.removeAttribute('href');
+      });
+    }
+    const safeUrl = outputUrl(download);
+    genericResultDialog.querySelector('#generic-result-title').textContent = title || '生成内容';
+    genericResultDialog.querySelector('[data-generic-meta]').textContent = metadata || '';
+    const markdownLink = genericResultDialog.querySelector('[data-generic-download]');
+    const bundleLink = genericResultDialog.querySelector('[data-generic-bundle]');
+    const isMarkdown = /\.md$/i.test(safeUrl);
+    markdownLink.hidden = !safeUrl;
+    markdownLink.textContent = isMarkdown ? '下载 Markdown' : '下载文本';
+    bundleLink.hidden = !isMarkdown;
+    if (safeUrl) {
+      const filename = decodeURIComponent(safeUrl.split('/').pop() || '生成内容.md');
+      markdownLink.href = safeUrl;
+      markdownLink.download = filename;
+      bundleLink.href = '/api/export?file=' + encodeURIComponent(decodeURIComponent(safeUrl.slice('/outputs/'.length)));
+      bundleLink.download = filename.replace(/\.md$/i, '') + '.zip';
+    } else { markdownLink.removeAttribute('href'); bundleLink.removeAttribute('href'); }
+    if (!genericResultDialog.open) genericResultDialog.showModal();
+    await renderMarkdown(String(markdown || ''), safeUrl, genericResultDialog.querySelector('[data-generic-body]'));
+  }
+
   async function openTask(id, shouldScroll = false) {
     const { task } = await api(`/api/tasks/${encodeURIComponent(id)}`);
     if (!task) throw new Error('没有找到这项任务。');
+    const saved = outputUrl(task.output_file);
+    const specialized = ['video_summary', 'paper_summary'].includes(task.capability);
+    const inRolePage = ['video', 'paper'].includes(state.view);
+    const hasResult = task.status === 'completed' && (saved || task.markdown);
+    if (shouldScroll && !hasResult && (task.status === 'completed' || !specialized || !inRolePage)) {
+      const detail = { completed: '这次运行没有可预览的成果。', deleted: '这份内容已移入回收站，可在内容库恢复。' }[task.status];
+      showRunDetail(capabilityTitle(task), task.status, detail || task.stage, task.error);
+      return;
+    }
+    // Only the original video and paper workflows use the specialized result card.
+    if (!specialized) {
+      if (!shouldScroll) return;
+      await showGenericResult(saved ? await readSavedReport(saved) : task.markdown, task.title, `${formatTime(task.finished_at, true)} · ${task.model || 'DeepSeek'} · 保存在本机`, saved);
+      return;
+    }
     state.currentTaskId = id;
     state.currentTask = task;
     state.activeReport = null;
     renderProgress();
     if (!shouldScroll && !['video','paper'].includes(state.view)) return;
-    if (task.status === 'completed' && task.markdown) {
+    if (hasResult) {
       if(shouldScroll && ['video','paper'].includes(state.view)) await setView(task.capability==='paper_summary'?'paper':'video',false);
       placeResult(!['video','paper'].includes(state.view));
-      await showResult(task.markdown, task.title, `${formatTime(task.finished_at, true)} · ${task.model || 'DeepSeek'} · 保存在本机`, task.output_file, `task:${task.id}:${task.finished_at}`);
+      await showResult(saved ? await readSavedReport(saved) : task.markdown, task.title, `${formatTime(task.finished_at, true)} · ${task.model || 'DeepSeek'} · 保存在本机`, saved, `task:${task.id}:${task.finished_at}`);
     } else {
       state.resultSignature = '';
       $('result-card').hidden = true;
     }
-    if (shouldScroll) {
-      if (state.view === 'chat') {
-        if (task.status !== 'completed') toast(task.status === 'deleted' ? '这份内容已移入回收站，可在内容库恢复。' : task.stage || statusNames[task.status]);
-        return;
-      }
-      if(['knowledge','archivist','history','library','settings','schedules'].includes(state.view)) { if(task.status!=='completed')toast(task.stage||statusNames[task.status]);return; }
+    if (shouldScroll && inRolePage) {
       const destination=task.capability==='paper_summary'?'paper':'video';
       await setView(destination, false);
       ($('result-card').hidden ? $(destination==='paper'?'paper-progress-card':'progress-card') : $('result-card')).scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1038,9 +1326,12 @@
   async function openReport(report) {
     const url = outputUrl(report?.url || report?.name);
     if (!url) throw new Error('这份笔记的文件地址不可用。');
-    const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
-    if (!response.ok) throw new Error('未能读取笔记文件，请刷新后重试。');
-    const markdown = await response.text();
+    const markdown = await readSavedReport(url);
+    const category = report.category || decodeURIComponent(url.slice('/outputs/'.length)).split('/')[0];
+    if (category === 'study_report' || (capabilityInfo(category) && !['video_summary', 'paper_summary'].includes(category))) {
+      await showGenericResult(markdown, report.title, `${formatTime(report.modified_at, true)} · 保存在本机`, url);
+      return;
+    }
     state.activeReport = report;
     const inConversation = !['video','paper'].includes(state.view);
     if(!inConversation) await setView(url.includes('/paper_summary/')?'paper':'video',false);
@@ -1066,19 +1357,25 @@
     ensurePolling();
   }
   function ensurePolling() {
-    const hasActive = state.tasks.some((task) => activeStatuses.has(task.status) || task.status==='waiting_user') || state.runs.some((run) => activeStatuses.has(run.status));
+    const isPending = (item) => activeStatuses.has(item.status) || item.status === 'waiting_user';
+    const hasActive = state.tasks.some(isPending) || state.runs.some(isPending);
     const hasScheduled = state.jobs.some((job) => job.enabled);
-    if (!hasActive && !hasScheduled) {
+    const recovering = schedulerRecovering();
+    if (!hasActive && !hasScheduled && !recovering) {
       clearTimeout(state.pollTimer);
       state.pollTimer = null;
       return;
     }
-    if (!state.pollTimer && !state.polling) state.pollTimer = setTimeout(pollTasks, hasActive ? 3000 : 15000);
+    if (!state.pollTimer && !state.polling) state.pollTimer = setTimeout(pollTasks, hasActive || recovering ? 3000 : 15000);
   }
   async function pollTasks() {
     state.pollTimer = null;
     state.polling = true;
     try {
+      if (!state.connected || schedulerRecovering()) {
+        await refreshAll();
+        return;
+      }
       const before = new Set(state.tasks.filter((task) => activeStatuses.has(task.status)).map((task) => task.id));
       const previousTasks=new Map(state.tasks.map(task=>[task.id,task.status+':'+task.stage+':'+task.attempt]));
       const previousRuns = new Map(state.runs.map((run) => [run.id, run.status]));
@@ -1097,7 +1394,6 @@
         renderReports();
         await refreshLibrary();
       }
-      if (!state.connected) setConnection(true);
     } catch (error) {
       setConnection(false, error.message);
     } finally {
@@ -1106,8 +1402,15 @@
     }
   }
 
+  function scheduledMaterialButton(run) {
+    return `<button type="button" class="text-button" data-schedule-material="${escapeHTML(run.id)}">提供论文材料</button>`;
+  }
+
   function renderSchedules() {
     const jobs = state.jobs;
+    const waiting = state.runs.filter((run) => run.capability === 'paper_summary' && run.status === 'waiting_user');
+    $('schedule-material-section').hidden = !waiting.length;
+    $('schedule-material-list').innerHTML = waiting.map((run) => `<article class="card schedule-item"><div class="schedule-item-content"><strong>${escapeHTML(capabilityTitle(run))}</strong><span class="schedule-item-url">${escapeHTML(inputSummary(run))}</span><span class="schedule-item-meta">${escapeHTML(formatTime(run.scheduled_at, true))}</span></div>${scheduledMaterialButton(run)}</article>`).join('');
     $('schedule-count').textContent = jobs.length ? `${jobs.filter((job) => job.enabled).length} 项待执行` : '';
     if (!jobs.length) {
       $('schedule-list').innerHTML = emptyState('给下一项任务留个时间', '选择一个功能并安排时间，下次执行计划会显示在这里。', 'clock');
@@ -1117,35 +1420,69 @@
   }
 
   function historyItems() {
-    const tasks = state.tasks.map((task) => ({ ...task, source: '即时任务', kind: 'task', timestamp: task.created_at, detail: task.error || `${task.stage || ''}${inputSummary(task) ? ` · ${inputSummary(task)}` : ''}`, capability_title: capabilityTitle(task) }));
+    const listedRuns = new Set(state.runs.map((run) => `${run.job_id}:${run.scheduled_at}`));
+    const tasks = state.tasks.filter((task) => !listedRuns.has(`${task.schedule_job_id}:${task.scheduled_at}`)).map((task) => ({ ...task, source: task.schedule_job_id ? '定时任务' : '即时任务', kind: 'task', timestamp: task.created_at, detail: task.error || `${task.stage || ''}${inputSummary(task) ? ` · ${inputSummary(task)}` : ''}`, capability_title: capabilityTitle(task) }));
     const runs = state.runs.map((run) => {
       const job = state.jobs.find((item) => item.id === run.job_id);
       const metadata = { ...job, ...run };
-      return { ...run, title: capabilityTitle(metadata), capability_title: capabilityTitle(metadata), detail: `${inputSummary(metadata)}${run.detail ? ` · ${run.detail}` : ''}`, source: '定时任务', kind: 'schedule', timestamp: run.scheduled_at, output_file: run.output_path, error: ['failed', 'missed'].includes(run.status) ? run.detail : null };
+      return { ...run, title: capabilityTitle(metadata), capability_title: capabilityTitle(metadata), detail: [inputSummary(metadata), run.detail].filter(Boolean).join(' · '), source: '定时任务', kind: 'schedule', timestamp: run.scheduled_at, output_file: run.output_path };
     });
     return [...tasks, ...runs].sort((a, b) => Number(b.timestamp) - Number(a.timestamp));
   }
+
+  function showRunDetail(title, status, stage, error) {
+    const lines = [...new Set([statusNames[status] || status, stage, error].filter(Boolean))];
+    $('run-detail-title').textContent = title || '运行详情';
+    $('run-detail-content').textContent = lines.join('\n\n');
+    $('run-detail-dialog').showModal();
+  }
+
+  async function showExecutionProfiles(id, kind) {
+    const run = kind === 'schedule' ? state.runs.find(item => String(item.id) === id) : null;
+    if (kind === 'schedule' && !run) throw new Error('运行记录已更新，请刷新后再打开。');
+    const taskId = kind === 'task' ? id : run.continuation_task_id;
+    const task = taskId ? (await api(`/api/tasks/${encodeURIComponent(taskId)}`)).task : null;
+    const taskProfiles = task?.execution_profiles || [];
+    const profiles = run?.execution_profile ? [run.execution_profile, ...taskProfiles.filter(profile => profile.attempt !== 1)] : taskProfiles;
+    const lines = profiles.map(profile => [
+      `第 ${profile.attempt} 次 · ${formatTime(profile.started_at, true)}`,
+      `角色：${state.agents.find(agent => agent.id === profile.role)?.title || (profile.role === 'conversation' ? '主 Agent' : profile.role)}`,
+      `模型：${profile.provider} / ${profile.model}`,
+      `角色配置 Skills：${profile.skills.join('、') || '无'}`,
+      `规则指纹：${profile.skills_sha256}`,
+    ].join('\n'));
+    $('run-detail-title').textContent = '执行配置';
+    $('run-detail-content').textContent = lines.join('\n\n') || '这次执行没有保存配置快照。';
+    $('run-detail-dialog').showModal();
+  }
+
   function renderHistory() {
     const items = historyItems();
     const completed = items.filter((item) => item.status === 'completed').length;
     const active = items.filter((item) => activeStatuses.has(item.status)).length;
-    const attention = items.filter((item) => ['failed', 'interrupted', 'missed'].includes(item.status)).length;
+    const needsAttention = (item) => ['failed', 'interrupted', 'missed', 'waiting_user'].includes(item.status);
+    const attention = items.filter(needsAttention).length;
     $('history-stats').innerHTML = [
       { label: '已完成的任务', value: completed, icon: 'check' },
       { label: '正在处理', value: active, icon: 'clock' },
       { label: '需要留意', value: attention, icon: 'alert' },
     ].map((item) => `<div class="stat-card"><div class="section-icon">${icons(item.icon)}</div><div><strong>${item.value}</strong><span>${escapeHTML(item.label)}</span></div></div>`).join('');
-    const visible = items.filter((item) => state.historyFilter === 'all' || state.historyFilter === 'active' && activeStatuses.has(item.status) || state.historyFilter === 'completed' && item.status === 'completed' || state.historyFilter === 'failed' && ['failed', 'interrupted', 'missed'].includes(item.status));
+    const visible = items.filter((item) => state.historyFilter === 'all' || state.historyFilter === 'active' && activeStatuses.has(item.status) || state.historyFilter === 'completed' && item.status === 'completed' || state.historyFilter === 'failed' && needsAttention(item));
     if (!visible.length) {
       $('history-list').innerHTML = emptyState(items.length ? '这个分类暂时没有记录' : '这里会记住每一次执行', items.length ? '切换分类，查看其他运行记录。' : '通过对话执行功能，或安排一个定时任务后，记录会显示在这里。', 'history');
       return;
     }
-    $('history-list').innerHTML = `<div class="history-table-wrap"><table class="history-table"><thead><tr><th scope="col">任务内容</th><th scope="col">来源</th><th scope="col">状态</th><th scope="col">开始时间</th><th scope="col">操作</th></tr></thead><tbody>${visible.map((item) => {
+    $('history-list').innerHTML = `<div class="history-table-wrap"><table class="history-table"><thead><tr><th scope="col">任务内容</th><th scope="col">来源</th><th scope="col">状态</th><th scope="col">提交或计划时间</th><th scope="col">操作</th></tr></thead><tbody>${visible.map((item) => {
       const title = item.kind === 'task' && item.title && item.title !== item.capability_title ? `${item.capability_title} · ${item.title}` : item.title || item.capability_title || '任务';
       const file = outputUrl(item.output_file);
       const report = state.reports.find((entry) => outputUrl(entry.url) === file);
-      let action = item.kind === 'task' ? `<button class="text-button" data-open-task="${escapeHTML(item.id)}">${item.status === 'completed' ? '查看结果' : '查看详情'}${icons('arrow')}</button>` : file ? `<button class="text-button" data-open-run-file="${escapeHTML(file)}" data-run-title="${escapeHTML(report?.title || item.capability_title || '定时任务结果')}" data-run-time="${Number(item.finished_at || item.timestamp) || ''}">查看结果${icons('arrow')}</button>` : item.error ? `<button class="text-button" data-run-detail="${escapeHTML(item.error)}" data-run-title="${escapeHTML(statusNames[item.status] || '运行情况')}">查看原因${icons('arrow')}</button>` : '—';
-      if (activeStatuses.has(item.status)) action += `<button class="text-button" ${item.kind === 'task' ? 'data-cancel-task' : 'data-cancel-run'}="${escapeHTML(item.id)}">取消执行</button>`;
+      let action = item.kind === 'task' ? `<button class="text-button" data-open-task="${escapeHTML(item.id)}">${item.status === 'completed' ? '查看结果' : '查看详情'}${icons('arrow')}</button>` : item.status === 'completed' && file ? `<button class="text-button" data-open-run-file="${escapeHTML(file)}" data-run-title="${escapeHTML(report?.title || item.capability_title || '定时任务结果')}" data-run-time="${Number(item.finished_at || item.timestamp) || ''}">查看结果${icons('arrow')}</button>` : `<button class="text-button" data-run-detail="${escapeHTML(item.id)}">查看详情${icons('arrow')}</button>`;
+      if (item.kind === 'schedule' && item.capability === 'paper_summary') {
+        if (item.status === 'waiting_user') action += scheduledMaterialButton(item);
+        else if (item.continuation_task_id && ['failed', 'interrupted'].includes(item.status)) action += `<button class="text-button" data-schedule-paper-task="${escapeHTML(item.continuation_task_id)}">继续论文任务</button>`;
+      }
+      if (activeStatuses.has(item.status) || item.status === 'waiting_user') action += `<button class="text-button" ${item.kind === 'task' ? 'data-cancel-task' : 'data-cancel-run'}="${escapeHTML(item.id)}">取消执行</button>`;
+      if (item.kind === 'task' || item.execution_profile || item.continuation_task_id) action += `<button type="button" class="text-button" data-run-profile="${escapeHTML(item.id)}" data-run-kind="${item.kind}">执行配置</button>`;
       return `<tr><td><span class="history-task-title" title="${escapeHTML(title)}">${escapeHTML(title)}</span><span class="history-task-detail" title="${escapeHTML(item.detail || '')}">${escapeHTML(item.detail || '')}</span></td><td>${escapeHTML(item.source)}</td><td>${statusPill(item.status)}</td><td>${escapeHTML(formatTime(item.timestamp))}</td><td>${action}</td></tr>`;
     }).join('')}</tbody></table></div>`;
   }
@@ -1160,17 +1497,38 @@
     renderHistory();
   }
 
-  async function refreshAll(showSuccess = false) {
-    if (state.loading) return;
-    state.loading = true;
+  let workspaceRefresh = null;
+  function refreshAll(showSuccess = false) {
+    if (!workspaceRefresh) workspaceRefresh = loadWorkspace(showSuccess).finally(() => { workspaceRefresh = null; });
+    return workspaceRefresh;
+  }
+
+  async function loadWorkspace(showSuccess) {
     $('refresh-button').disabled = true;
     $('refresh-button').querySelector('.icon').classList.add('refreshing');
     try {
       const status = await api('/api/status');
+      const restarted = state.status && state.status.csrf_token !== status.csrf_token;
+      if (restarted) {
+        state.chatUploading = null;
+        state.watchGeneration += 1;
+        workspaceConversationPending = true;
+      }
       state.status = status;
+      const restoringConversation = workspaceConversationPending;
+      if (restoringConversation) {
+        setConnection(false, '正在同步服务重启后的对话状态…');
+        const generation = state.watchGeneration;
+        const conversation = await readSelectedConversation();
+        if (generation === state.watchGeneration) {
+          inlineError('chat-error');
+          applyRefreshedConversation(conversation);
+        }
+        workspaceConversationPending = false;
+      }
       setConnection(true);
       renderStatus();
-      const results = await Promise.allSettled([api('/api/tasks'), api('/api/reports'), api('/api/schedules'), api('/api/capabilities'), state.chatBusy ? Promise.resolve(null) : api('/api/conversations/current'),api('/api/subagents'),api('/api/knowledge/ingestions')]);
+      const results = await Promise.allSettled([api('/api/tasks'), api('/api/reports'), api('/api/schedules'), api('/api/capabilities'), restoringConversation ? refreshConversations() : refreshConversation(),api('/api/subagents'),api('/api/knowledge/ingestions')]);
       if (results[0].status === 'fulfilled') state.tasks = results[0].value.tasks || [];
       if (results[1].status === 'fulfilled') state.reports = results[1].value.reports || [];
       if (results[2].status === 'fulfilled') {
@@ -1181,7 +1539,6 @@
         state.capabilities = results[3].value.capabilities || [];
         renderCapabilities();
       }
-      if (results[4].status === 'fulfilled' && results[4].value && !state.chatBusy) applyConversation(results[4].value);
       if(results[5]?.status==='fulfilled'){state.agents=results[5].value.agents||[];state.parallel=results[5].value.parallel;}
       if(results[6]?.status==='fulfilled'){state.knowledgeJobs=results[6].value.jobs||[];renderKnowledgeJobs();}
       renderReports();
@@ -1198,7 +1555,6 @@
       setConnection(false, error.message);
       if (!state.reports.length) $('recent-reports').innerHTML = emptyState('等待连接本地工作空间', '连接恢复后，你保存的笔记会显示在这里。', 'monitor');
     } finally {
-      state.loading = false;
       $('refresh-button').disabled = false;
       $('refresh-button').querySelector('.icon').classList.remove('refreshing');
       ensurePolling();
@@ -1218,7 +1574,8 @@
     $('view-'+view).querySelector('h1')?.focus({preventScroll:true});
     try{
       if(reload)await refreshAll();
-      if(view==='settings')await AgentControls.profiles('global',$('standalone-agent-settings'));
+      if(state.view!==view)return;
+      if(view==='settings'){await AgentControls.profiles('global',$('standalone-agent-settings'));await StudyLogConnection.refresh();}
       if(['video','paper'].includes(view)){const capability=view==='paper'?'paper_summary':'video_summary';if(state.currentTask?.capability!==capability)state.currentTask=state.tasks.find(task=>task.capability===capability)||null;state.currentTaskId=state.currentTask?.id||null;renderProgress();}
       if(view==='library')await refreshLibrary();
       if(['knowledge','archivist'].includes(view))await refreshKnowledge();
@@ -1300,8 +1657,9 @@
     $('schedule-time-label').textContent = daily ? '每日执行时间' : '执行日期与时间';
     if (daily) $('schedule-time').value = '09:00';
     else {
-      const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
-      const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(tomorrow);
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const parts = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(tomorrow);
       const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
       $('schedule-time').value = `${values.year}-${values.month}-${values.day}T09:00`;
     }
@@ -1345,14 +1703,23 @@
     const disableButton = event.target.closest('[data-disable-job]');
     try {
       const config=event.target.closest('[data-agent-settings]');if(config){if(state.view!=='chat')await setView('chat',false);await AgentControls.profiles(config.dataset.agentSettings);return;}
-      const panel=event.target.closest('[data-workspace-panel]');if(panel){if(state.view!=='chat')await setView('chat',false);await AgentControls.panel(panel.dataset.workspacePanel);return;}
+      const panel=event.target.closest('[data-workspace-panel]');if(panel){if(panel.dataset.workspacePanel==='settings'){await setView('settings',false);$('study-log-heading').scrollIntoView({block:'start'});return;}if(state.view!=='chat')await setView('chat',false);await AgentControls.panel(panel.dataset.workspacePanel);return;}
       const session=event.target.closest('[data-account-session]');if(session){if(state.view!=='chat')await setView('chat',false);await AgentControls.session(session.dataset.accountSession);return;}
       const material=event.target.closest('[data-task-material]');if(material){state.materialTaskId=material.dataset.taskMaterial;materialInput.click();return;}
+      const scheduledMaterial = event.target.closest('[data-schedule-material]');
+      const scheduledPaper = event.target.closest('[data-schedule-paper-task]');
+      if (scheduledMaterial || scheduledPaper) {
+        const id = scheduledMaterial ? (await api(`/api/schedule-runs/${encodeURIComponent(scheduledMaterial.dataset.scheduleMaterial)}/material`, 'POST', {})).task.id : scheduledPaper.dataset.schedulePaperTask;
+        await setView('paper', false);
+        await openTask(id, true);
+        ensurePolling();
+        return;
+      }
       const artifactOpen = event.target.closest('[data-artifact-open]');
       const artifactDelete = event.target.closest('[data-artifact-delete]');
       const artifactRestore = event.target.closest('[data-artifact-restore]');
       const conversation = event.target.closest('[data-conversation]');
-      if (conversation) { applyConversation(await api(`/api/conversations/${encodeURIComponent(conversation.dataset.conversation)}/select`, 'POST', {})); if($('knowledge-dialog').open)$('knowledge-dialog').close();await setView('chat',false);inlineError('chat-error');return; }
+      if (conversation) { await navigateConversation(conversation.dataset.conversation); return; }
       const scope=event.target.closest('[data-conversation-scope]');
       if(scope){state.conversationScope=scope.dataset.conversationScope;renderConversations();return;}
       const knowledgeOpen=event.target.closest('[data-knowledge-open]');
@@ -1360,11 +1727,16 @@
       const knowledgeRestore=event.target.closest('[data-knowledge-restore]');
       if(knowledgeRestore){await api('/api/knowledge/'+encodeURIComponent(knowledgeRestore.dataset.knowledgeRestore)+'/restore','POST',{});await refreshKnowledge();toast('知识已恢复');return;}
       const knowledgeRetry=event.target.closest('[data-knowledge-retry]');
-      if(knowledgeRetry){await api('/api/knowledge-ingestions/'+encodeURIComponent(knowledgeRetry.dataset.knowledgeRetry)+'/retry','POST',{});await Promise.all([refreshKnowledge(),refreshConversations(),refreshConversation()]);toast('已安排重新提取');return;}
+      if(knowledgeRetry){await api('/api/knowledge-ingestions/'+encodeURIComponent(knowledgeRetry.dataset.knowledgeRetry)+'/retry','POST',{});await refreshKnowledgeContext();toast('已安排重新提取');return;}
       const cancelTask = event.target.closest('[data-cancel-task]');
-      if (cancelTask) { await api(`/api/tasks/${encodeURIComponent(cancelTask.dataset.cancelTask)}/cancel`, 'POST', {}); await refreshAll(); toast('任务已取消'); return; }
+      if (cancelTask) {
+        const result = await api(`/api/tasks/${encodeURIComponent(cancelTask.dataset.cancelTask)}/cancel`, 'POST', {});
+        await refreshAll();
+        toast(`任务${statusNames[result.status] || '状态暂不可用'}`);
+        return;
+      }
       const cancelRun = event.target.closest('[data-cancel-run]');
-      if (cancelRun) { await api(`/api/schedule-runs/${encodeURIComponent(cancelRun.dataset.cancelRun)}/cancel`, 'POST', {}); await refreshAll(); toast('已取消本次执行，后续计划保留'); return; }
+      if (cancelRun) { const result = await api(`/api/schedule-runs/${encodeURIComponent(cancelRun.dataset.cancelRun)}/cancel`, 'POST', {}); await refreshAll(); toast(result.status === 'cancelled' ? '已取消本次执行，后续计划保留' : `本次执行状态为${statusNames[result.status] || result.status}`); return; }
       if (artifactOpen) { await openArtifact(artifactOpen.dataset.artifactOpen); return; }
       if (artifactDelete || artifactRestore) {
         const button = artifactDelete || artifactRestore;
@@ -1380,10 +1752,13 @@
       if (reportButton) { await openReport(state.reports[Number(reportButton.dataset.reportIndex)]); return; }
       if (taskButton) { await openTask(taskButton.dataset.openTask, true); return; }
       if (runButton) { await openReport({ url: runButton.dataset.openRunFile, title: runButton.dataset.runTitle, modified_at: Number(runButton.dataset.runTime) }); return; }
+      const profileButton = event.target.closest('[data-run-profile]');
+      if (profileButton) { await showExecutionProfiles(profileButton.dataset.runProfile, profileButton.dataset.runKind); return; }
       if (detailButton) {
-        $('run-detail-title').textContent = detailButton.dataset.runTitle || '运行情况';
-        $('run-detail-content').textContent = detailButton.dataset.runDetail;
-        $('run-detail-dialog').showModal();
+        const run = state.runs.find(item => String(item.id) === detailButton.dataset.runDetail);
+        if (!run) throw new Error('运行记录已更新，请刷新后再打开。');
+        showRunDetail(capabilityTitle(run), run.status, run.detail,
+          run.status === 'completed' ? '这次运行没有可预览的成果。' : null);
         return;
       }
       if (event.target.closest('[data-close-detail]')) { $('run-detail-dialog').close(); return; }
@@ -1417,21 +1792,38 @@
     event.preventDefault();
     if (state.chatBusy || state.chatUploading || state.conversationArchived || $('chat-submit').disabled || $('chat-input').disabled) return;
     const message = $('chat-input').value.trim();
-    if (!message && !state.chatAttachment) return;
+    if (!message && !state.chatDraft.attachment) return;
     await submitChat(message);
   });
   $('library-category').addEventListener('change',()=>refreshLibrary().catch(error=>toast(error.message,true)));
   $('chat-attach').addEventListener('click',()=>$('chat-paper-file').click());
   $('chat-paper-file').addEventListener('change',async()=>{
-    const file=$('chat-paper-file').files[0];if(!file)return;
-    const conversationId=state.conversationId;
-    state.chatUploading=true;updateSubmitState();inlineError('chat-error');
-    try{const paper=await uploadPaper(file);if(state.conversationId===conversationId){state.chatAttachment=paper;renderChatAttachment();}}
-    catch(error){inlineError('chat-error',error.message);}
-    finally{state.chatUploading=false;$('chat-paper-file').value='';updateSubmitState();}
+    const input = $('chat-paper-file');
+    const file = input.files[0];
+    input.value = '';
+    if (!file || state.chatUploading) return;
+    const upload = state.chatUploading = Symbol();
+    updateSubmitState();
+    inlineError('chat-error');
+    try {
+      const paper = await uploadPaper(file);
+      if (state.chatUploading !== upload) return;
+      state.chatDraft.attachment = paper;
+      renderChatAttachment();
+    } catch (error) {
+      if (state.chatUploading === upload) inlineError('chat-error', error.message);
+    } finally {
+      if (state.chatUploading === upload) {
+        state.chatUploading = null;
+        updateSubmitState();
+      }
+    }
   });
-  $('chat-attachment-remove').addEventListener('click',()=>{state.chatAttachment=null;renderChatAttachment();});
+  $('chat-attachment-remove').addEventListener('click',()=>{state.chatDraft.attachment=null;renderChatAttachment();});
   $('paper-source').addEventListener('change',updatePaperSource);
+  $('paper-presentation').addEventListener('change',()=>{
+    $('paper-presentation-options').hidden=!$('paper-presentation').checked;
+  });
   $('paper-form').addEventListener('submit',async event=>{
     event.preventDefault();if(state.paperSubmitting)return;
     inlineError('paper-error');state.paperSubmitting=true;updateSubmitState();
@@ -1441,21 +1833,17 @@
       else if(mode==='text')parameters.paper_text=$('paper-text').value.trim();
       else {const paper=await uploadPaper($('paper-file').files[0]);parameters.upload_id=paper.upload_id;}
       if($('paper-title').value.trim())parameters.title=$('paper-title').value.trim();
+      if($('paper-presentation').checked){
+        parameters.include_presentation=true;
+        parameters.presentation_minutes=Number($('paper-presentation-minutes').value);
+        parameters.presentation_language=$('paper-presentation-language').value;
+      }
       const result=await api('/api/tasks','POST',{capability:'paper_summary',parameters});
       state.tasks.unshift(result.task);await openTask(result.task.id,true);renderTasks();toast('论文总结已提交，完成后自动保存');
     }catch(error){inlineError('paper-error',error.message);}
     finally{state.paperSubmitting=false;updateSubmitState();}
   });
-  $('chat-new').addEventListener('click', async () => {
-    try {
-      applyConversation(await api('/api/conversations/new', 'POST', {}));
-      await refreshConversations();
-      await setView('chat', false);
-      inlineError('chat-error');
-      $('chat-input').focus({preventScroll:true});
-    }
-    catch (error) { inlineError('chat-error', error.message); }
-  });
+  $('chat-new').addEventListener('click', () => navigateConversation());
   $('chat-stop').addEventListener('click', async () => {
     if (!state.chatRunId) return;
     try { await api(`/api/chat/runs/${encodeURIComponent(state.chatRunId)}/stop`, 'POST', {}); $('chat-stage').textContent = '正在停止…'; }
@@ -1473,7 +1861,7 @@
     try{
       const extract=$('archive-form').querySelector('input[name="archive-mode"]:checked').value==='knowledge';
       const result=await api('/api/conversations/'+encodeURIComponent(state.archiveTarget)+'/archive','POST',{extract_knowledge:extract});
-      applyConversation(result.conversation);await Promise.all([refreshConversations(),refreshKnowledge()]);
+      applyConversation(result.conversation);await refreshKnowledgeContext();
       $('archive-dialog').close();toast(result.extraction_error?'对话已归档，知识提取暂未启动：'+result.extraction_error:extract?'已归档，知识正在后台整理':'已归档，完整对话已保留',Boolean(result.extraction_error));
     }catch(error){inlineError('archive-error',error.message);}
     finally{$('archive-submit').disabled=false;}
@@ -1520,7 +1908,10 @@
       const tags=[...new Set($('knowledge-tags-input').value.split(/[,，]/).map(tag=>tag.trim()).filter(Boolean))];
       await api('/api/knowledge/'+encodeURIComponent(entry.id)+'/update','POST',{title:$('knowledge-title-input').value,content:$('knowledge-content-input').value,tags,revision:entry.revision});
       await Promise.all([openKnowledge(entry.id),refreshKnowledge()]);toast('知识已更新，来源记录已保留');
-    }catch(error){inlineError('knowledge-detail-error',error.message);}
+    }catch(error){
+      inlineError('knowledge-detail-error',error.message);
+      $('knowledge-detail-error').focus();
+    }
     finally{if(button)button.disabled=false;}
   });
   $('knowledge-delete').addEventListener('click',async()=>{
@@ -1528,12 +1919,15 @@
     try{
       await api('/api/knowledge/'+encodeURIComponent(entry.id)+(entry.deleted_at?'/restore':''),entry.deleted_at?'POST':'DELETE',{});
       $('knowledge-dialog').close();await refreshKnowledge();toast(entry.deleted_at?'知识已恢复':'已移入知识回收站，可恢复');
-    }catch(error){inlineError('knowledge-detail-error',error.message);}
+    }catch(error){
+      inlineError('knowledge-detail-error',error.message);
+      $('knowledge-detail-error').focus();
+    }
   });
   for (const action of ['rename','delete']) $('conversation-' + action).addEventListener('click', () => {
     state.conversationEdit = {action, id:state.conversationId};
     $('conversation-dialog-title').textContent = action === 'rename' ? '重命名对话' : '删除这段对话？';
-    $('conversation-dialog-help').textContent = action === 'delete' ? '聊天记录将删除。已生成的报告和后台任务会保留。' : '为这段对话起一个方便查找的名称。';
+    $('conversation-dialog-help').textContent = action === 'delete' ? '聊天记录和本窗口中的未发送草稿将删除。已生成的报告和后台任务会保留。' : '为这段对话起一个方便查找的名称。';
     $('conversation-name').hidden = action === 'delete'; $('conversation-name').required = action === 'rename';
     $('conversation-name').value = $('conversation-title').textContent;
     inlineError('conversation-edit-error'); $('conversation-dialog').showModal();
@@ -1543,7 +1937,9 @@
     event.preventDefault(); const edit = state.conversationEdit;
     try {
       const data = await api(`/api/conversations/${encodeURIComponent(edit.id)}${edit.action === 'rename' ? '/rename' : ''}`, edit.action === 'rename' ? 'POST' : 'DELETE', edit.action === 'rename' ? {title:$('conversation-name').value} : {});
-      applyConversation(data); await refreshConversations(); $('conversation-dialog').close();
+      applyConversation(data);
+      if (edit.action === 'delete') chatDrafts.delete(edit.id);
+      await refreshConversations(); $('conversation-dialog').close();
     } catch (error) { inlineError('conversation-edit-error', error.message); }
   });
   let chatInputComposing = false;
@@ -1558,15 +1954,21 @@
   $('refresh-button').addEventListener('click', () => refreshAll(true));
   $('result-download').addEventListener('click', downloadOfflineNote);
   $('reconnect-button').addEventListener('click', () => refreshAll());
+  window.addEventListener('agent-workspace-reconnected', async () => {
+    if (workspaceRefresh) await workspaceRefresh;
+    await refreshAll();
+  });
   window.addEventListener('hashchange', () => setView(location.hash.slice(1)));
-  window.addEventListener('pagehide', () => { clearTimeout(state.pollTimer); state.pollTimer = null; clearTimeout(state.knowledgePollTimer);state.knowledgePollTimer=null; });
+  window.addEventListener('pagehide', () => { clearWorkspaceRetry(); clearTimeout(state.pollTimer); state.pollTimer = null; clearTimeout(state.knowledgePollTimer);state.knowledgePollTimer=null; });
   window.addEventListener('pageshow', ensurePolling);
+  window.addEventListener('pageshow', scheduleWorkspaceRetry);
   window.addEventListener('pageshow', ensureKnowledgePolling);
   const materialInput=document.createElement('input');materialInput.type='file';materialInput.accept='application/pdf,.pdf';materialInput.hidden=true;document.body.append(materialInput);
   materialInput.addEventListener('change',async()=>{const taskId=state.materialTaskId,file=materialInput.files[0];materialInput.value='';if(!file||!taskId)return;
     try{const paper=await uploadPaper(file);await api('/api/tasks/'+encodeURIComponent(taskId)+'/resume','POST',{upload_id:paper.upload_id});await refreshAll();toast('PDF 已导入，原任务继续处理');}catch(error){toast(error.message,true);}
   });
-  AgentConsole.init({api,state,setView,toast,knowledgeJobHTML});
+  AgentConsole.init({api,state,setView,toast,knowledgeJobHTML,capabilityTitle});
+  StudyLogConnection.init(api);
   AgentControls.init({api,state,toast,refresh:async(name)=>{
     if(!name)return refreshAll();if(name==='library')return refreshLibrary();if(name==='knowledge')return refreshKnowledge();
     if(['schedules','history'].includes(name)){await refreshSchedules();const tasks=await api('/api/tasks');state.tasks=tasks.tasks||[];renderTasks();return;}

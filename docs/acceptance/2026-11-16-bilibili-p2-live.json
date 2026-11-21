@@ -1,0 +1,46 @@
+{
+  "date": "2026-11-16",
+  "requirement": "FR-07",
+  "source_url": "https://www.bilibili.com/video/BV1it411g7CX/?p=2",
+  "video_id": "BV1it411g7CX_p2",
+  "model": "deepseek-flash",
+  "full_run": {
+    "scope": "实际工作台本机 HTTP、游客读取、ASR、模型总结和视觉核对、文件保存及 ZIP 下载。使用临时工作区和内置 Skills。",
+    "elapsed_seconds": 195.0,
+    "transcript_source": "本地 faster-whisper 转录",
+    "transcript_language": "zh",
+    "transcript_segments": 174,
+    "source_blocks": 6,
+    "knowledge_units": 5,
+    "sections": 5,
+    "mermaid_diagrams": 6,
+    "candidate_frames": 8,
+    "extracted_frames": 7,
+    "retained_frames": 4,
+    "zip_files_matching_saved_bytes": 6,
+    "source_urls_match_part": true,
+    "all_units_link_to_cues": true,
+    "all_candidate_frames_in_linked_cue_intervals": true
+  },
+  "content_checks": [
+    "成稿将边集能否为空保留为课程待讨论问题，未将点集非空扩展到边集。",
+    "成稿与原图均保留路径长度按边数计算以及单节点路径长度为零。",
+    "示例同一图中的普通路径和四条测试路径在正文中分别说明。画面连线与列出的测试路径可对应。",
+    "成稿保留不可行路径证明的不可判定性，以及一条测试只执行一条测试路径的确定性前提。",
+    "本地转录包含不确定的辅助节点术语及测试路径记号，正文保留转录来源和不确定性。"
+  ],
+  "visual_replay_after_prompt_change": {
+    "scope": "原任务保留的四张 JPEG 和相同章节草稿，用修订后的实际视觉阶段复验。",
+    "elapsed_seconds": 37.6,
+    "accepted_captions": 3,
+    "initial_captions_with_incidental_marks": 3,
+    "accepted_captions_with_incidental_marks_after_change": 0,
+    "frame_checks": {
+      "115": "四个节点与连接基本准确，图注仍错误表示未标明方向，原图可辨箭头。",
+      "200": "保留外部箭头分别指向节点 1 和 2，以及中间分叉与汇合。",
+      "300": "复验未保留这张路径长度幻灯片，原成稿正文仍有按边计长和零长度的定义。",
+      "380": "保留两次分叉、汇合及四条路径表达式。"
+    }
+  },
+  "automated_checks": {"full_suite_including_local_http": 334, "video_suite": 31}
+}

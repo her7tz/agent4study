@@ -1,0 +1,64 @@
+{
+  "date": "2026-11-07",
+  "status": "interrupted_user_pause_quality_not_reviewed",
+  "scope": "FR-06/FR-08 full unchanged public Transformer PDF through PaperUploads and normal paper_summary capability",
+  "source_kind": "locally_preserved_full_public_pdf",
+  "original_sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+  "input_pages": 15,
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "effective_rule_sha256": "8115fe4e522f5eb29c95946fb6499877202619976c77e1eae051c87fba8109fa",
+  "rules_modified": false,
+  "engine_change": "bounded_original_source_review_after_consolidation",
+  "custom_task_prompt": false,
+  "private_knowledge_or_study_log_used": false,
+  "predeclared_review": [
+    {
+      "id": "table_B_value_dimension",
+      "criterion": "Table 3 B changes d_k to 16 or 32 only; d_v stays inherited base 64. Do not claim d_k=d_v=16/32."
+    },
+    {
+      "id": "appendix_scope",
+      "criterion": "Full 15-page input includes appendix text/captions on pages 13-15. Distinguish unavailable visual interpretation from a false claim that appendix text was not provided."
+    },
+    {
+      "id": "N_only",
+      "criterion": "Table 3 N=2/4/6/8 rows inherit the base configuration except N; preserve PPL/BLEU pairs 6.11/23.7, 5.19/25.3, 4.92/25.8, 4.88/25.5. Lower PPL is better; higher BLEU is better. N=8 improves PPL but lowers BLEU relative to N=6; do not attach a blanket multifactor warning to N-only rows."
+    },
+    {
+      "id": "big",
+      "criterion": "The big row changes model width, feed-forward width, heads, dropout and training steps; do not attribute its result to a single changed variable."
+    },
+    {
+      "id": "experiment_scope",
+      "criterion": "Table 3 numbers are English-to-German newstest2013 development results and per-wordpiece PPL, distinct from newstest2014 test results and per-word perplexity."
+    },
+    {
+      "id": "table_source",
+      "criterion": "The final report links the relevant knowledge unit to original physical PDF page 9 for Table 3."
+    },
+    {
+      "id": "prior_qualifier",
+      "criterion": "The unscaled qualifier belongs to dot-product attention rather than additive attention."
+    },
+    {
+      "id": "prior_position_pages",
+      "criterion": "Positional encoding method comes from physical page 6; learned-position ablation values come from physical page 9; paragraph support preserves both when both are discussed."
+    },
+    {
+      "id": "prior_attention_pages",
+      "criterion": "The three Transformer attention applications retain physical page 5 support for their detailed description, rather than citing physical page 3 alone."
+    },
+    {
+      "id": "prior_prose_and_limits",
+      "criterion": "Do not expose internal material chunk-completion narration; preserve the source conflict of 41.8 versus 41.0 when discussing it; distinguish figures/captions and extracted text from unperformed visual analysis."
+    }
+  ],
+  "pipeline": {
+    "status": "interrupted",
+    "reason": "User paused the goal; local test process stopped with exit 130 before a final result."
+  },
+  "quality_review": {
+    "status": "not_reviewed_interrupted"
+  }
+}

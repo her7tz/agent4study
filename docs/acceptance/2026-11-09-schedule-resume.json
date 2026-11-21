@@ -1,0 +1,26 @@
+{
+  "date": "2026-11-09",
+  "requirements": ["FR-13", "FR-14"],
+  "method": "Paused the actual standalone service process with SIGSTOP, then resumed with SIGCONT. Used the real wall clock, a disposable SQLite store and a local osascript substitute. No OS sleep, model call, or Study Log network request.",
+  "grace_seconds": 60,
+  "notification_fixture": {"missed_notification_delay_seconds": 9, "exit_status": 1},
+  "baseline": {
+    "pause_seconds": 69.01,
+    "outside_grace_status": "missed",
+    "inside_grace_at_resume_status": "missed",
+    "inside_grace_at_resume_started": false
+  },
+  "fixed": {
+    "pause_seconds": 69.01,
+    "outside_grace_status": "missed",
+    "outside_grace_started": false,
+    "inside_grace_at_resume_status": "failed",
+    "inside_grace_at_resume_started_after_due_seconds": 55.04,
+    "inside_grace_failure_reason": "Study Log was intentionally unconnected in the isolated workspace.",
+    "once_plans_disabled": true,
+    "daily_occurrences_missed": 2,
+    "daily_future_plan_enabled": true,
+    "missed_log_and_notification_attempt_observed": true
+  },
+  "tests": {"full_suite_passed": 281, "full_suite_skipped": 0, "python_3_9_scheduler_checks_passed": 19}
+}

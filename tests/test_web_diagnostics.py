@@ -1,9 +1,11 @@
 """Failure logs retain diagnostics while hiding configured credentials."""
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock
 
-from web_server import SecretSafeLogger
+from agent_profiles import redact
+from harness import SecretSafeLogger
 
 
 class FailureLoggingTests(unittest.TestCase):
@@ -19,6 +21,10 @@ class FailureLoggingTests(unittest.TestCase):
         self.assertIn("RuntimeError", text)
         self.assertIn("[已隐藏]", text)
         self.assertNotIn("test-private-credential", text)
+
+    def test_role_key_with_common_prefix_is_fully_hidden_in_trace(self):
+        settings = SimpleNamespace(api_key='fixture', _profile_secrets=('fixture', 'fixture-role-key'))
+        self.assertEqual(redact(settings, '配置 fixture-role-key'), '配置 [已隐藏凭证]')
 
 
 if __name__ == "__main__":

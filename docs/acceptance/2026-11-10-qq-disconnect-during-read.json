@@ -1,0 +1,15 @@
+{
+  "date": "2026-11-10",
+  "requirements": ["FR-18"],
+  "baseline_disconnect_waited_for_inflight_response": true,
+  "browser": {
+    "name": "headless Chrome",
+    "disconnected_before_bridge_reply": true,
+    "reconnected_before_old_reply": true,
+    "old_reply_did_not_overwrite_new_material": true,
+    "bridge_history_requests": 2,
+    "send_requests": 0
+  },
+  "scope": "Actual workbench loopback server and Chrome with synthetic messages and a simulated bridge. Platform unread state and live account remain unverified.",
+  "tests": {"full_suite_passed": 305, "qq_targeted_passed": 12, "javascript_syntax": true, "python_3_9_syntax": true}
+}

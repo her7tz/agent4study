@@ -1,0 +1,75 @@
+{
+  "date": "2026-11-06",
+  "status": "citation_and_targeted_content_checks_passed_quality_review_partial",
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "seconds": 125.1,
+  "input": "Two-page public arXiv PDF excerpt; original physical pages 6 and 9",
+  "citation_page_basis": "Physical pages 1 and 2 of the supplied excerpt PDF",
+  "report": ".local/acceptance/paper-citations-v2-20261106/paper_summary/paper_summary_20261106-173607_63fc81fc.md",
+  "labels": [
+    {
+      "unit_id": "k1",
+      "pdf_pages": [
+        1
+      ]
+    },
+    {
+      "unit_id": "k2",
+      "pdf_pages": [
+        1,
+        2
+      ]
+    },
+    {
+      "unit_id": "k3",
+      "pdf_pages": [
+        2
+      ]
+    },
+    {
+      "unit_id": "k4",
+      "pdf_pages": [
+        2
+      ]
+    },
+    {
+      "unit_id": "k5",
+      "pdf_pages": [
+        2
+      ]
+    },
+    {
+      "unit_id": "k6",
+      "pdf_pages": [
+        2
+      ]
+    }
+  ],
+  "summary_processing": {
+    "version": 1,
+    "source_blocks": 2,
+    "source_characters": 9136,
+    "chunks": 1,
+    "merge_passes": 1,
+    "model_calls": 2,
+    "all_chunks_processed": true,
+    "checks": "structure_source_ids_and_declared_coverage_only",
+    "rendered_units": 6,
+    "rendering_check": "inline_and_declared_unit_ids"
+  },
+  "quality_review": {
+    "method": "Manual comparison of the final report with the same two-page original PDF excerpt used in the first run",
+    "checks_passed": [
+      "Position encoding cites both the method and experimental source pages; architecture ablations cite supplied PDF page 2",
+      "The former statement that PPL, BLEU and parameter values are all lower did not recur; metric values and quality directions are separated",
+      "The caption rule that unlisted parameter values inherit the base model is explicitly retained",
+      "Missing parsing results and absent visual verification remain explicit"
+    ],
+    "remaining_scope": [
+      "The scale section does not describe N-only ablation rows, so this run does not prove the previously reported blanket attribution issue resolved for those rows",
+      "Formula and table layout have not been visually verified; excerpt results do not establish accuracy on the full paper or other materials"
+    ]
+  },
+  "limitation": "This run validates citation mapping and the stated targeted content checks only. Overall summary quality remains under acceptance."
+}

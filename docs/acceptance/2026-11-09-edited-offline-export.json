@@ -1,0 +1,22 @@
+{
+  "date": "2026-11-09",
+  "status": "passed",
+  "scope": "FR-12 edited saved document through browser preview and offline exports",
+  "fixture": "synthetic PDF, image, evidence, and Markdown; real workbench browser UI, Chrome local file and ZIP",
+  "task_preview_used_file_over_database_snapshot": true,
+  "after_external_edit_text_in_html_and_zip": true,
+  "server_stopped_before_opening_offline_file": true,
+  "offline_image_embedded_and_visible": true,
+  "offline_attachment_click_downloads_match_original": true,
+  "byte_exact_zip_members": [
+    "edited Markdown",
+    "frame.png",
+    "original.pdf",
+    "source-evidence.json"
+  ],
+  "asset_sha256": {
+    "frame.png": "5e5b2ec04b3e2581487a6c8dd7835aa8edd874a5fbd38412c6d3375171260870",
+    "original.pdf": "9572d9246d5797a33801c3abfc1edec195250f5be1de8277ffe2278d0c745d6b",
+    "source-evidence.json": "83147a2ecad87ca4b91e49f7a740646546cd6bd70a4712ccbda9dcf8f113571c"
+  }
+}

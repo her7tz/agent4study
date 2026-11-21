@@ -1,0 +1,23 @@
+{
+  "date": "2026-11-10",
+  "requirements": ["FR-10", "FR-11", "NFR-04"],
+  "index_transaction_failure": {
+    "rolled_back_uncommitted_knowledge": true,
+    "same_job_completed_after_service_restart": true,
+    "share_not_read_again": true,
+    "model_not_reinitialized": true,
+    "retained_original_source_metadata": true,
+    "archive_files": 1,
+    "indexed_points": 2
+  },
+  "isolated_process_exit": {
+    "worker_exit_at_index_boundary": 73,
+    "explicit_retry_completed_same_local_chat_job": true,
+    "original_message_evidence_preserved": true,
+    "model_not_reinitialized": true,
+    "archive_files": 1,
+    "indexed_points": 2
+  },
+  "scope": "Real local knowledge service, SQLite and file publishing with synthetic chat, share text and model results.",
+  "tests": {"full_suite_passed": 299, "knowledge_and_summary_targeted_passed": 47, "python_3_9_syntax": true}
+}

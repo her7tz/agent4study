@@ -1,0 +1,26 @@
+{
+  "date": "2026-11-08",
+  "requirement": "FR-14",
+  "status": "passed",
+  "scope": "Real macOS launchctl bootstrap, KeepAlive after TERM, and bootout for a uniquely named temporary service running the production scheduler entry point",
+  "configuration": {
+    "generator": "scheduler.install_macos_launch_agent",
+    "entry_point": "agent.py service run",
+    "run_at_load": true,
+    "keep_alive": true,
+    "isolated_database_and_output": true,
+    "production_label_touched": false,
+    "user_launchagents_directory_written": false
+  },
+  "checks": {
+    "target": "gui/501/local.agent.acceptance.scheduler.979f00051a0d4397905420ca320c31ed",
+    "bootstrap_exit": 0,
+    "first_scheduler_pid": 60182,
+    "first_scheduler_log_local": "2026-11-08 13:26:11",
+    "restarted_scheduler_pid": 60218,
+    "restarted_scheduler_log_local": "2026-11-08 13:26:19",
+    "bootout_exit": 0,
+    "temporary_label_absent_after_bootout": true
+  },
+  "remaining": ["Actual logout and login auto-start", "Machine sleep and wake", "Real notification-permission denial and interrupted model requests"]
+}

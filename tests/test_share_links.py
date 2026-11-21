@@ -162,6 +162,30 @@ class ShareParsingTests(unittest.TestCase):
         with self.assertRaises(ShareLinkError):
             self.read(html)
 
+    def test_html_media_only_turn_keeps_order_without_reading_fallback_or_urls(self):
+        html = ('<div data-message-author-role="user">请解释递归。</div>'
+                '<div data-message-author-role="assistant" data-message-id="media">'
+                '<audio src="https://example.invalid/signed.mp3">这是播放器回退文字</audio>'
+                '<iframe src="https://example.invalid/private">这个也不属于对话</iframe></div>'
+                '<div data-message-author-role="assistant" data-message-id="actual">递归需要终止条件。</div>')
+        result = self.read(html)
+        self.assertTrue(result['source_details']['has_attachments'])
+        self.assertEqual([item['id'] for item in result['messages']], [1, 2, 3])
+        media = result['messages'][1]
+        self.assertFalse(media['has_readable_text'])
+        self.assertIn('未读取', media['content'])
+        self.assertNotIn('播放器', media['content'])
+        self.assertNotIn('不属于对话', media['content'])
+        self.assertEqual(result['source_details']['media_only_message_count'], 1)
+        self.assertEqual(result['source_urls'], [URL])
+
+    def test_unclosed_html_turn_rejects_previously_completed_message(self):
+        html = ('<div data-message-author-role="user">请解释递归。</div>'
+                '<div data-message-author-role="assistant">递归需要终止条件。</div>'
+                '<div data-message-author-role="assistant">稍后对上文修正')
+        with self.assertRaisesRegex(ShareLinkError, '未完成'):
+            self.read(html)
+
     def test_navigation_challenge_or_unexecuted_script_does_not_become_chat(self):
         for html in ('<title>Just a moment...</title><div>Checking your browser</div>',
                 '<h1>ChatGPT</h1><button>Log in</button>',
@@ -188,6 +212,17 @@ class ShareParsingTests(unittest.TestCase):
         }}
         result = self.read(json_page(payload))
         self.assertEqual(result["messages"][1]["content"], "选中的答案")
+        payload.pop('current_node')
+        payload['linear_conversation'] = ['u', 'a']
+        self.assertEqual(self.read(json_page(payload))['messages'][1]['content'], '选中的答案')
+
+    def test_ambiguous_structured_branch_cannot_fall_back_to_visible_html(self):
+        payload = {'mapping': {'u': {'message': message('user', '问题'), 'children': ['a', 'b']},
+            'a': {'message': message('assistant', '甲'), 'parent': 'u', 'children': []},
+            'b': {'message': message('assistant', '乙'), 'parent': 'u', 'children': []}}}
+        fallback = '<div data-message-author-role="assistant">页面仅渲染的内容</div>'
+        with self.assertRaisesRegex(ShareLinkError, '分支'):
+            self.read(json_page(payload).replace('</body>', fallback + '</body>'))
 
     def test_ambiguous_or_broken_mapping_is_rejected(self):
         cases = [
@@ -320,6 +355,23 @@ class TurboStreamTests(unittest.TestCase):
         with patch("share_links.fetch_public", return_value=(URL, html, "text/html")):
             result = read_shared_conversation(URL)
         self.assertEqual(len(result["messages"]), 2)
+
+    def test_unicode_separators_in_message_are_not_stream_record_boundaries(self):
+        pool = Pool()
+        payload = conversation()
+        answer = "第一行\u2028第二行\u2029下一段\u0085最后一行"
+        payload["linear_conversation"][1]["message"]["content"]["parts"] = [answer]
+        pool.add({"loaderData": Promise(101)})
+        initial = json.dumps(pool.values)
+        start = len(pool.values)
+        pool.add({"data": payload})
+        deferred = "P101:" + json.dumps(pool.values[start:], ensure_ascii=False)
+        split_at = len(initial) + 1 + deferred.index("\u2028") + 1
+        html = stream_page([initial, deferred], split_at=split_at)
+        with patch("share_links.fetch_public", return_value=(URL, html, "text/html")):
+            result = read_shared_conversation(URL)
+        self.assertEqual([item["role"] for item in result["messages"]], ["user", "assistant"])
+        self.assertEqual(result["messages"][1]["content"], answer)
 
     def test_missing_message_promise_rejects_partial_conversation(self):
         pool = Pool()

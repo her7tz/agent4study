@@ -1,0 +1,47 @@
+{
+  "date": "2026-11-06",
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "seconds": 10.1,
+  "status": "passed",
+  "input": "Public official Python asyncio-task page; no personal records",
+  "slices": [
+    {
+      "url": "https://docs.python.org/3/library/asyncio-task.html",
+      "start_char": 0,
+      "end_char": 24000,
+      "next_start": 24000,
+      "content_sha256": "184f036b4ed35e161c0234a415bc6bda2945d18072d6578a7a98babef19a3890",
+      "read_chars": 24000,
+      "available_chars": 44097
+    },
+    {
+      "url": "https://docs.python.org/3/library/asyncio-task.html",
+      "start_char": 24000,
+      "end_char": 44097,
+      "next_start": null,
+      "content_sha256": "184f036b4ed35e161c0234a415bc6bda2945d18072d6578a7a98babef19a3890",
+      "read_chars": 20097,
+      "available_chars": 44097
+    }
+  ],
+  "source": {
+    "type": "source",
+    "title": "Coroutines and tasks — Python 3.15.2 documentation",
+    "url": "https://docs.python.org/3/library/asyncio-task.html",
+    "kind": "page",
+    "published_at": null,
+    "accessed_at": "2026-11-06",
+    "truncated": false,
+    "read_chars": 44097,
+    "available_chars": 44097,
+    "read_ranges": [
+      [
+        0,
+        44097
+      ]
+    ]
+  },
+  "reply": "我已按 `next_start` 续读完成，第二段返回 `next_start: null`，说明可提取正文已经读完。\n\n## 文档最后部分的内容简述\n\n文档末尾聚焦「任务对象（Task）」及紧邻的线程调度与自省：\n\n- **跨线程调度**：`run_coroutine_threadsafe()` 把协程提交给指定事件循环，返回 `concurrent.futures.Future`，可跨 OS 线程取结果或取消任务。\n- **自省**：`current_task()`、`all_tasks()`、`iscoroutine()` 用于查看运行中的任务与判断协程对象。\n- **Task 类**：类 Future 的协程包装对象，采用协作式调度，同一循环内一次只运行一个任务；构造可传 `name`、`context`、`eager_start`（急切启动会在创建时同步执行到首次阻塞）。\n- **状态与结果**：`done()`、`result()`、`exception()`，未完成时取结果抛 `InvalidStateError`，被取消则抛 `CancelledError`。\n- **回调与栈查看**：`add_done_callback()`、`remove_done_callback()`、`get_stack()`、`print_stack()`。\n- **协程、上下文与命名**：`get_coro()`（急切完成的任务可能返回 `None`）、`get_context()`、`get_name()`、`set_name()`。\n- **取消机制**：`cancel()` 在下一轮循环向协程抛 `CancelledError`，协程可清理甚至抑制；`cancelled()` 判断是否真被取消；`uncancel()` 递减取消计数（供 asyncio 内部的结构化并发使用，用户若抑制取消需调用）；`cancelling()` 返回待处理取消请求数，计数大于零但任务仍在运行时 `cancelled()` 仍为 `False`。\n\n## 实际阅读范围\n\n- 网址：`https://docs.python.org/3/library/asyncio-task.html`，页面标题为 *Coroutines and tasks — Python 3.15.2 documentation*，页面标注最后更新于 2026-11-05（22:32 UTC），本次访问日期 2026-11-06。\n- 分两次读取：字符 0–24000，然后 24000–44097；`available_chars` 为 44097，第二次 `next_start` 为 `null`，即已覆盖全部可提取正文（约 44,097 字符）。\n- 覆盖章节：协程、可等待对象、创建任务、任务取消、任务组、睡眠、并发运行任务（`gather`）、急切任务工厂、屏蔽取消（`shield`）、超时（`timeout`/`timeout_at`/`wait_for`）、等待原语（`wait`/`as_completed`）、在线程中运行、从其他线程调度、自省、Task 对象。\n- 说明：工具在第二次响应中仍标 `truncated: true`，但同时给出 `next_start: null` 且 `end_char` 等于 `available_chars`，因此按可提取正文判断已到末尾；页面导航、主题切换等模板文字属于非正文部分。整个回答未检索其他网页。",
+  "checks": "Actual model requested multiple nonempty reads; same normalized content hash; aggregate ranges cover full extracted text."
+}

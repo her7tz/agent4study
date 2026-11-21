@@ -1,0 +1,13 @@
+{
+  "date": "2026-11-10",
+  "requirements": ["FR-02", "FR-03", "NFR-02", "NFR-03"],
+  "checks": {
+    "failed_search_retains_no_body_scope_on_retry": true,
+    "failed_url_with_fragment_persists_canonical_evidence": true,
+    "successful_alias_reads_clear_older_failure_on_retry": true,
+    "disabled_tool_does_not_return_cached_result_as_a_new_call": true,
+    "earlier_read_ranges_preserved_without_network_replay": [[0, 2000]]
+  },
+  "scope": "Real conversation state and SQLite with synthetic search responses, webpage content, and model replies. No external service was used in the retry scenarios.",
+  "tests": {"full_suite_passed": 309, "web_and_retry_targeted_passed": 35, "python_3_9_syntax": true}
+}

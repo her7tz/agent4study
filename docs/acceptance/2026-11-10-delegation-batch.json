@@ -1,0 +1,14 @@
+{
+  "date": "2026-11-10",
+  "requirements": ["FR-04", "FR-14", "NFR-04"],
+  "baseline_first_member_submitted_before_second_write_failure": true,
+  "checks": {
+    "incorrect_owner_rejected_before_any_write": true,
+    "second_insert_failure_rolled_back_entire_batch": true,
+    "no_execution_on_write_or_queue_rejection": true,
+    "queue_rejection_records_every_member_with_same_batch_id": true,
+    "two_slot_eight_task_parallelism_cancellation_and_delivery_passed": true
+  },
+  "scope": "Actual loopback workbench API, SQLite and shared executor, with synthetic task inputs and business results.",
+  "tests": {"full_suite_passed": 311, "runtime_targeted_passed": 41, "python_3_9_syntax": true}
+}

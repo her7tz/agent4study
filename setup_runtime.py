@@ -88,9 +88,33 @@ def main():
     parser = argparse.ArgumentParser(description="配置 Agent 的本地视频运行环境")
     parser.add_argument("--skip-install", action="store_true")
     parser.add_argument("--skip-model-download", action="store_true")
+    parser.add_argument("--presentation-node", type=Path)
+    parser.add_argument("--presentation-modules", type=Path)
+    parser.add_argument("--presentation-pdftoppm", type=Path)
     args = parser.parse_args()
     data_home = Path(os.environ.get("MINIMAL_AGENT_HOME", str(ROOT / ".local"))).expanduser()
     data_home.mkdir(parents=True, exist_ok=True)
+    if args.presentation_node or args.presentation_modules:
+        if not args.presentation_node or not args.presentation_modules:
+            parser.error("PPT 配置需要同时指定 --presentation-node 和 --presentation-modules。")
+        from types import SimpleNamespace
+        from paper_presentation_rendering import presentation_runtime
+        from storage_layout import atomic_text
+        configuration = {"node": str(args.presentation_node.expanduser().resolve()),
+                         "modules": str(args.presentation_modules.expanduser().resolve())}
+        if args.presentation_pdftoppm:
+            configuration["pdftoppm"] = str(args.presentation_pdftoppm.expanduser().resolve())
+        target = data_home / "presentation-runtime.json"
+        previous = target.read_text() if target.exists() else None
+        try:
+            atomic_text(target, json.dumps(configuration))
+            presentation_runtime(SimpleNamespace(data_home=data_home))
+        except Exception:
+            if previous is None:
+                target.unlink(missing_ok=True)
+            else:
+                atomic_text(target, previous)
+            raise
     python = prepare_python()
     if not args.skip_install:
         print("正在安装项目独立环境中的视频工具…", flush=True)

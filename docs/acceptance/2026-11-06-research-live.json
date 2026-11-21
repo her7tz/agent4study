@@ -1,0 +1,183 @@
+{
+  "date": "2026-11-06",
+  "scope": "FR-03 public research using actual main Agent tool loop",
+  "material": "Public Python TaskGroup documentation question plus deliberately missing public document URL",
+  "storage": "Disposable conversation and knowledge database; no personal context or Study Log data",
+  "runs": [
+    {
+      "seconds": 14.1,
+      "provider": "deepseek",
+      "model": "deepseek-flash",
+      "tool_events": [
+        {
+          "type": "tool",
+          "name": "search_web",
+          "phase": "started"
+        },
+        {
+          "type": "tool",
+          "name": "search_web",
+          "phase": "completed"
+        },
+        {
+          "type": "tool",
+          "name": "read_webpage",
+          "phase": "started"
+        },
+        {
+          "type": "tool",
+          "name": "read_webpage",
+          "phase": "failed"
+        },
+        {
+          "type": "tool",
+          "name": "read_webpage",
+          "phase": "started"
+        },
+        {
+          "type": "tool",
+          "name": "read_webpage",
+          "phase": "completed"
+        },
+        {
+          "type": "tool",
+          "name": "search_web",
+          "phase": "started"
+        },
+        {
+          "type": "tool",
+          "name": "search_web",
+          "phase": "completed"
+        }
+      ],
+      "read_sources": [
+        {
+          "type": "source",
+          "title": "Coroutines and tasks — Python 3.15.2 documentation",
+          "url": "https://docs.python.org/3/library/asyncio-task.html",
+          "kind": "page",
+          "published_at": null,
+          "accessed_at": "2026-11-06",
+          "truncated": true,
+          "read_chars": 24000,
+          "available_chars": 44097
+        },
+        {
+          "type": "source",
+          "title": "https://docs.python.org/3/library/this-page-does-not-exist-for-acceptance.html",
+          "url": "https://docs.python.org/3/library/this-page-does-not-exist-for-acceptance.html",
+          "kind": "read_failed",
+          "reason": "HTTP 404"
+        }
+      ],
+      "search_results": [
+        "https://www.python.org/",
+        "https://www.python.org/downloads/",
+        "https://pythonlang.cn/",
+        "https://www.runoob.com/python/python-tutorial.html",
+        "https://docs.python.org/zh-cn/",
+        "https://www.liaoxuefeng.com/wiki/1016959663602400",
+        "https://docs.qq.com/",
+        "https://docs.corp.google.com/",
+        "https://www.about.google/intl/zh-CN/docs/about/",
+        "https://www.wwww.docs.google.com/",
+        "https://docs.feishu.cn/"
+      ],
+      "reply_sha256": "05d7f0fce9e8a0950a061badafe1656b7afa509c4ea631557aa099ff79dd16f6",
+      "review": {
+        "real_official_body_and_404_observed": true,
+        "partial_read_scope_visible_in_reply": true,
+        "exception_case_terms_present": true,
+        "search_found_target_document": false
+      }
+    },
+    {
+      "seconds": 28.9,
+      "provider": "deepseek",
+      "model": "deepseek-flash",
+      "tool_events": [
+        {
+          "type": "tool",
+          "name": "search_web",
+          "phase": "started"
+        },
+        {
+          "type": "tool",
+          "name": "search_web",
+          "phase": "completed"
+        },
+        {
+          "type": "tool",
+          "name": "read_webpage",
+          "phase": "started"
+        },
+        {
+          "type": "tool",
+          "name": "read_webpage",
+          "phase": "failed"
+        },
+        {
+          "type": "tool",
+          "name": "read_webpage",
+          "phase": "started"
+        },
+        {
+          "type": "tool",
+          "name": "read_webpage",
+          "phase": "completed"
+        },
+        {
+          "type": "tool",
+          "name": "search_web",
+          "phase": "started"
+        },
+        {
+          "type": "tool",
+          "name": "search_web",
+          "phase": "failed"
+        }
+      ],
+      "read_sources": [
+        {
+          "type": "source",
+          "title": "Coroutines and tasks — Python 3.15.2 documentation",
+          "url": "https://docs.python.org/3/library/asyncio-task.html",
+          "kind": "page",
+          "published_at": null,
+          "accessed_at": "2026-11-06",
+          "truncated": true,
+          "read_chars": 24000,
+          "available_chars": 44097
+        },
+        {
+          "type": "source",
+          "title": "https://docs.python.org/3/library/this-page-does-not-exist-for-acceptance.html",
+          "url": "https://docs.python.org/3/library/this-page-does-not-exist-for-acceptance.html",
+          "kind": "read_failed",
+          "reason": "HTTP 404"
+        }
+      ],
+      "search_results": [
+        "https://www.python.org/",
+        "https://www.python.org/downloads/",
+        "https://www.runoob.com/python/python-tutorial.html",
+        "https://www.w3schools.com/python/",
+        "https://www.liaoxuefeng.com/wiki/1016959663602400",
+        "https://www.programiz.com/python-programming/online-compiler/"
+      ],
+      "reply_sha256": "f27445c1c938a858c11b085d3949d80d94376ac027af56b5373d27e6280b9359",
+      "review": {
+        "real_official_body_and_404_observed": true,
+        "partial_read_scope_visible_in_reply": true,
+        "exception_case_terms_present": true,
+        "search_found_target_document": false
+      }
+    }
+  ],
+  "separate_duckduckgo_probe": "Timed out; no results obtained",
+  "tests": {
+    "selected": "tests.test_web_evidence and tests.test_agent_contracts",
+    "passed": 15
+  },
+  "limitation": "Body reading and evidence scope worked; public search relevance remains inadequate in these runs."
+}

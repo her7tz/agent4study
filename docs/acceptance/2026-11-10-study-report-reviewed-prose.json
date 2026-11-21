@@ -1,0 +1,17 @@
+{
+  "date": "2026-11-10",
+  "requirements": ["FR-06", "FR-16"],
+  "baseline_saved_incorrect_factual_rewrite_with_valid_unit_ids": true,
+  "checks": {
+    "actual_site_routes_and_registered_capability": true,
+    "reviewed_overview_and_knowledge_preserved": true,
+    "suggestions_separate_and_unknown_unit_ids_rejected": true,
+    "empty_suggestions_accepted": true,
+    "actual_record_ids_in_index": [1, 2],
+    "local_report_files": 1,
+    "statistics_total_points": 20,
+    "site_learning_data_unchanged": true
+  },
+  "scope": "Real local Study Log routes and Agent capability with synthetic records, synthetic credentials and model replies.",
+  "tests": {"full_suite_passed": 308, "study_and_schedule_targeted_passed": 32, "python_3_9_syntax": true}
+}

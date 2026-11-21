@@ -1,0 +1,18 @@
+{
+  "date": "2026-11-09",
+  "status": "passed",
+  "scope": "FR-02/14 live TLS stream early EOF, explicit retry, user stop and restart after OS process termination",
+  "fixture": "local HTTPS peer with a trusted fixture certificate for the unchanged official hostname and isolated workbench HTTP processes; no external model access",
+  "model_posts": 4,
+  "automatic_replays": 0,
+  "statuses": [
+    "failed",
+    "completed",
+    "cancelled",
+    "interrupted"
+  ],
+  "partial_survived_failed_reply_restart": true,
+  "partial_survived_active_process_exit": true,
+  "user_stop_closed_model_socket": true,
+  "synthetic_secret_in_workbench_responses": false
+}

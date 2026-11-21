@@ -1,0 +1,108 @@
+{
+  "date": "2026-11-07",
+  "status": "targeted_runtime_checks_passed_python_startup_delay_cause_unresolved",
+  "scope": "FR-01/FR-14 native-owned local startup, delayed readiness, launchd configuration and uninstall errors, scheduler notification failures; native archive retry and conversation restoration",
+  "fixture": {
+    "root": "/private/tmp/agent-desktop-acceptance-20261106",
+    "app": "Agent 验收工作台.app",
+    "port": 18779,
+    "real_components": ["AppKit/WKWebView desktop", "HTTP", "WebRuntime", "ChatService", "SQLite", "knowledge ingestion and archive persistence"],
+    "synthetic_boundaries": ["conversation.create_client", "agent_profiles.PROVIDERS.deepseek", "web_server.execute_capability"],
+    "external_model_calls": 0,
+    "production_runtime_data_or_user_launchd_configuration_modified_by_fixture": false,
+    "events_sha256": "36bc3250dd9896fc96cf1999f8f68333d6a038fb264470602bafde27004841eb",
+    "fixture_script_sha256": "1c3dc7dbb6776a5172abad861872320f786ca4b7a0fc24a2212c5e092c25559d",
+    "native_binary_sha256": "e9b3523c5a4c0eddade29a932af06bd00b9dd9ef07fab2b2250df92aa5fc3bc1"
+  },
+  "automated_checks": {
+    "launchd": {
+      "test_module": "tests.test_launchd_service",
+      "results": [
+        {"python": "3.12.7", "tests": 12, "passed": 12, "exit_code": 0},
+        {"python": "3.9.6", "tests": 12, "passed": 12, "exit_code": 0}
+      ],
+      "boundaries": "Real Settings and plist serialization in a temporary Path.home; all installation/uninstallation subprocess calls intercepted. No existing user service or LaunchAgents plist was touched.",
+      "checks": [
+        "Generated plist uses the current interpreter, resolved agent.py, project working directory, data/output directories, captured PATH and separate output/error logs",
+        "RunAtLoad and KeepAlive are true; API Key name and synthetic Key value are absent from the plist",
+        "Bootstrap failure reaches CLI stderr with exit 1 and no installation success message",
+        "Uninstall targets the exact service label and removes its plist on success or ESRCH only",
+        "An absent service remains idempotent even when its plist still exists; an absent plist does not prevent stopping by service label",
+        "Permission denial, unknown errors and launchctl execution failure preserve the plist and return CLI failure; localized or misleading stderr is not used as the success predicate"
+      ],
+      "absent_label_probe": {
+        "authority": "Installed launchctl(1) manual: service-target syntax and EXIT STATUS",
+        "target": "gui/501/local.agent.acceptance.absent.ff3ceb93ed9244929ca9be6363b82c90",
+        "target_was_never_registered": true,
+        "print_exit_code": 113,
+        "bootout_exit_code": 3,
+        "launchctl_error_posix_3": "3: No such process",
+        "production_absence_predicate": "errno.ESRCH"
+      }
+    },
+    "scheduler_notification_failures": {
+      "tests": [
+        "tests.test_local_runtime.SchedulingTests.test_waiting_material_survives_denied_notification",
+        "tests.test_local_runtime.SchedulingTests.test_failed_and_missed_records_survive_notification_failure"
+      ],
+      "results": [
+        {"python": "3.12.7", "tests": 2, "passed": 2, "exit_code": 0},
+        {"python": "3.9.6", "tests": 2, "passed": 2, "exit_code": 0}
+      ],
+      "boundaries": "Temporary SQLite; actual notification helper with intercepted osascript process failure or timeout; no system notification permission changed.",
+      "verified": "waiting_user, failed and missed records retain their reasons when notification delivery fails; waiting for paper material attempts the appropriate notification"
+    }
+  },
+  "native_ui_observations": {
+    "observer": "Root agent using CUA and accessibility; distinct from automated tests and this artifact writer's read-only process/database checks",
+    "checks_passed": [
+      "Native self-launch connects without an externally started backend",
+      "PID 95051's controlled 75-second startup delay exceeds the 45-second initial deadline; the native UI later connects automatically without clicking reconnect",
+      "After archive failure and application restart, retry produces one archive document and one knowledge entry; preview shows finite graph traversal, a visited set and source messages 16/17",
+      "Restoring the conversation displays 这段对话已恢复。已保存1份归档文档，整理1条知识 and an available input field",
+      "Menu Quit exits the temporary native app; subsequent CUA inventory no longer lists it as running"
+    ],
+    "swift_source_review": "A live but unready native-owned backend keeps 10-second polling after the initial deadline; a ready probe hides the failure overlay and restores the connected state."
+  },
+  "read_only_runtime_evidence": {
+    "source": "Temporary events.jsonl, known-PID ps checks, loopback status, and immutable read-only SQLite queries",
+    "initial_native_ownership": {"app_pid": 75414, "backend_pid": 75417, "backend_ppid": 75414, "app_started_local": "2026-11-07T06:53:38+08:00", "backend_started_local": "2026-11-07T06:53:39.204746+08:00"},
+    "controlled_delay_runs": [
+      {"pid": 95051, "delay_seconds": 75, "delayed_at": "2026-11-07T12:33:27.386284+08:00", "started_at": "2026-11-07T12:34:42.434507+08:00", "closed_at": "2026-11-07T12:40:12.768794+08:00"},
+      {"pid": 96663, "delay_seconds": 75, "delayed_at": "2026-11-07T12:41:24.704934+08:00", "started_at": "2026-11-07T12:42:39.754904+08:00", "closed_at": "2026-11-07T12:49:14.361445+08:00"}
+    ],
+    "archive_retry": {"failed_attempt_pid": 95051, "successful_attempt_pid": 96663, "successful_attempt": 2, "ingestion_status": "completed", "archive_files": 1, "knowledge_documents": 1, "active_knowledge_entries": 1, "message_ids": [16, 17], "conversation_archived_after_restore": false},
+    "older_python_initialization_observation": {
+      "pid": 53830,
+      "sampled_at": "2026-11-06T18:13:28.192+08:00",
+      "sampled_stack": "Py_InitializeFromConfig -> config_init_import -> getpath_readlines -> fopen -> __open_nocancel",
+      "later_backend_started_at": "2026-11-06T18:17:23.547146+08:00",
+      "later_backend_closed_at": "2026-11-06T18:18:05.353206+08:00",
+      "interpretation": "Initialization was blocked at sampling time but this same PID later executed the backend; do not classify it as never having run. The intermittent delay cause remains unresolved."
+    }
+  },
+  "cleanup": {
+    "checked_at": "2026-11-07T12:50:37+08:00",
+    "known_pids_checked": [53830, 75414, 75417, 76932, 95051, 96663],
+    "known_pids_still_present": [],
+    "last_recorded_backend_pid": 96663,
+    "loopback_18779_status": "connection_refused",
+    "native_app_not_running": "Root CUA inventory observation",
+    "services_started_or_restarted_by_this_artifact_task": 0
+  },
+  "source_sha256": {
+    "scheduler.py": "fc6709c0e881b325d954a7bfcac8c113cada6fd7e961c6797972a79aa668abb1",
+    "harness.py": "834ed34ad30f29fd18c0342c309332368007be62b20efb8d1fda289aadbe5eec",
+    "desktop/AgentDesktop.swift": "95c2f5b963ff17b626147a06d9efc66fb0db171b1eca6f8ab2eba93e641baf06",
+    "tests/test_launchd_service.py": "4d2c23447743cbe894f267c22ab0df3eb162ef1b3d51a5099c8073d5d58a3034",
+    "tests/test_local_runtime.py": "01358f48b9c6b8f620299da295c9880e4dbf51b42e1d3d0d345f4f0dc6babb99",
+    "knowledge.py": "7a08c09fe8cf2fe0d490f607d35c43f6f2998ecbbb6be0e024ace9f9e9704367"
+  },
+  "limitations": [
+    "No real launchd service installation, login launch or keepalive restart was exercised; service configuration and failure behavior use intercepted subprocesses, plus the never-registered-label probe.",
+    "Notification denial and timeout were injected; actual macOS notification permission was not revoked.",
+    "The 75-second delay was intentionally injected in the temporary backend and does not explain the separately observed intermittent Python initialization delay.",
+    "Synthetic model output validates native lifecycle, archive persistence and retry behavior, not model quality or external account integrations.",
+    "Actual system sleep/wake was not exercised."
+  ]
+}

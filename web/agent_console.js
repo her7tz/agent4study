@@ -2,12 +2,16 @@
 window.AgentConsole=(()=>{
   const $=id=>document.getElementById(id);
   const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const aliases={video_summary:'video_learning',paper_summary:'paper_reading',conversation_knowledge:'knowledge_archivist'};
   const statuses={queued:'排队',running:'运行',waiting_user:'等待材料',completed:'完成',failed:'失败',cancelled:'取消',interrupted:'中断'};
-  let state,api,setView,toast,knowledgeJobHTML;
-  function owner(task){return task.agent_id||aliases[task.capability]||task.capability;}
-  function name(id){return (state.agents||[]).find(agent=>agent.id===id)?.title||id;}
-  function taskLine(task){return `<div class="agent-task-line"><span class="agent-task-state">${escape(statuses[task.status]||task.status)}</span><div><strong>${escape(name(owner(task)))} · ${escape(task.id.slice(0,8))}</strong><p>${escape(task.error||task.stage||'')}</p>${task.group_id?`<small>批次 ${escape(task.group_id.slice(0,8))}</small>`:''}</div><button type="button" class="text-button" data-open-task="${escape(task.id)}">${task.status==='completed'?'打开成果':'查看'}</button>${['queued','running','waiting_user'].includes(task.status)?`<button type="button" class="text-button" data-cancel-task="${escape(task.id)}">取消</button>`:''}</div>`;}
+  let state,api,setView,toast,knowledgeJobHTML,capabilityTitle;
+  function owner(task){
+    const agents=state.agents||[];
+    return agents.find(agent=>agent.id===task.agent_id)?.id ||
+      agents.find(agent=>agent.operations.some(operation=>operation.id===task.capability))?.id ||
+      task.agent_id || task.capability;
+  }
+  function name(id){return ['conversation','global'].includes(id)?'主 Agent':(state.agents||[]).find(agent=>agent.id===id)?.title||id;}
+  function taskLine(task){return `<div class="agent-task-line"><span class="agent-task-state">${escape(statuses[task.status]||task.status)}</span><div><strong>${escape(name(owner(task)))} · ${escape(capabilityTitle(task))} · ${escape(task.id.slice(0,8))}</strong><p>${escape(task.error||task.stage||'')}</p>${task.group_id?`<small>批次 ${escape(task.group_id.slice(0,8))}</small>`:''}</div><button type="button" class="text-button" data-open-task="${escape(task.id)}">${task.status==='completed'?'打开成果':'查看'}</button>${['queued','running','waiting_user'].includes(task.status)?`<button type="button" class="text-button" data-cancel-task="${escape(task.id)}">取消</button>`:''}</div>`;}
   function ensurePages(agents){
     for(const agent of agents){
       if($('view-'+agent.page))continue;
@@ -31,8 +35,10 @@ window.AgentConsole=(()=>{
       const overview=$('agent-'+agent.id+'-overview'),log=$('agent-'+agent.id+'-tasks');
       if(overview)overview.innerHTML=`<p class="agent-purpose">${escape(agent.description)}</p><div class="agent-owned-tools"><div><strong>拥有的能力</strong>${agent.operations.map(op=>`<p>${escape(op.title)}</p>`).join('')}</div><div><strong>${agent.delegatable?'执行工具':'整理步骤'}</strong><p>${(agent.delegatable?agent.tools:agent.workflow_steps||[]).map(escape).join(' · ')}</p></div></div><button type="button" class="button button-secondary" data-owner-config="${escape(agent.id)}">配置此 Agent 的 API、模型与 Skills</button>`;
       if(log){
-        if(agent.id==='knowledge_archivist')log.innerHTML=state.knowledgeJobs.length?state.knowledgeJobs.map(knowledgeJobHTML).join(''):'<p class="field-help">从 ChatGPT 分享整理知识，或将本地对话归档并整理知识后，任务会显示在这里。</p>';
-        else {const tasks=state.tasks.filter(task=>owner(task)===agent.id);log.innerHTML=tasks.length?tasks.map(taskLine).join(''):'<p class="field-help">此 Agent 还没有任务。</p>';}
+        const lines=state.tasks.filter(task=>owner(task)===agent.id).map(taskLine);
+        if(agent.id==='knowledge_archivist')lines.push(...state.knowledgeJobs.map(knowledgeJobHTML));
+        const empty=agent.id==='knowledge_archivist'?'从 ChatGPT 分享整理知识，或将本地对话归档并整理知识后，任务会显示在这里。':'此 Agent 还没有任务。';
+        log.innerHTML=lines.join('')||`<p class="field-help">${empty}</p>`;
       }
     }
   }
@@ -46,6 +52,6 @@ window.AgentConsole=(()=>{
     if(name==='/help'&&parts.length===1){$('console-command-help').open=true;return true;}
     throw Error('未知命令。输入 /help 查看控制台命令，或直接用自然语言描述任务。');
   }
-  function init(options){({state,api,setView,toast,knowledgeJobHTML}=options);document.addEventListener('click',async event=>{const button=event.target.closest('[data-owner-config]');if(!button)return;try{const role=button.dataset.ownerConfig,host=$('agent-'+role+'-profile');host.hidden=false;await AgentControls.profiles(role,host,true);}catch(error){toast(error.message,true);}});}
+  function init(options){({state,api,setView,toast,knowledgeJobHTML,capabilityTitle}=options);document.addEventListener('click',async event=>{const button=event.target.closest('[data-owner-config]');if(!button)return;try{const role=button.dataset.ownerConfig,host=$('agent-'+role+'-profile');host.hidden=false;await AgentControls.profiles(role,host,true);}catch(error){toast(error.message,true);}});}
   return {init,render,command};
 })();

@@ -129,18 +129,23 @@ class DependencyStatusTests(unittest.TestCase):
         runtime = object.__new__(WebRuntime)
         runtime.snapshot = Mock(return_value=SimpleNamespace(
             api_key="fixture", model="fixture-model", base_url="https://example.invalid",
-            output_dir=Path("/tmp/fixture-summary"),
+            data_home=Path("/tmp/fixture-state"), output_dir=Path("/tmp/fixture-summary"),
         ))
         runtime.stop_event = threading.Event()
         runtime.executor = Mock()
         runtime.executor.status.return_value = {"limit": 4, "running": 0, "queued": 0}
         runtime.scheduler_owned = True
+        runtime.scheduler_thread = Mock()
+        runtime.scheduler_thread.is_alive.return_value = True
+        runtime.scheduler = SimpleNamespace(recovery_complete=threading.Event())
+        runtime.scheduler.recovery_complete.set()
         runtime.token = "fixture-token"
         tools = {"yt-dlp": "/project/yt-dlp", "ffmpeg": "/package/ffmpeg", "node": "/project/node"}
         with patch("web_server.resolve_tool", side_effect=tools.get), patch("web_server.importlib.util.find_spec", return_value=object()):
             status = runtime.status()
         self.assertEqual(status["dependencies"], {
             "yt_dlp": True, "ffmpeg": True, "asr": True, "javascript_runtime": True, "paper_pdf": True,
+            "paper_presentation": False,
         })
         probe.assert_called_once_with()
         self.assertNotIn("api_key", status)

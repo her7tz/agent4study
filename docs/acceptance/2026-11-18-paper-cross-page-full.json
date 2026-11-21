@@ -1,0 +1,31 @@
+{
+  "date": "2026-11-18",
+  "workflow": "execute_capability paper_summary",
+  "report": "paper_summary/paper_summary_20261118-004658_ba15f75e.md",
+  "units": 19,
+  "processing": {
+    "version": 1,
+    "source_blocks": 12,
+    "source_characters": 94062,
+    "chunks": 7,
+    "merge_passes": 2,
+    "model_calls": 16,
+    "source_review_batches": 6,
+    "reviewed_units": 19,
+    "all_chunks_processed": true,
+    "checks": "structure_source_ids_and_declared_coverage_only",
+    "source_review_scope": "source_windows",
+    "rendered_units": 19,
+    "processing_window_asides_removed": 0,
+    "rendering_check": "assembled_reviewed_units_with_reader_citations"
+  },
+  "subagent_verified": true,
+  "original_pdf_identical": true,
+  "zip_original_pdf_identical": true,
+  "zip_evidence_identical": true,
+  "fact_spot_checks": {
+    "sampling": "Each agent includes about 10 successful trajectories; total 120 and 2822 iterations",
+    "annotation_continuation": "Periodically revisited examples to ensure consistency"
+  },
+  "limitations": "Only listed claims and file integrity checked; no exhaustive factual review."
+}

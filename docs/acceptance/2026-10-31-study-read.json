@@ -1,0 +1,11 @@
+{
+  "date": "2026-10-31",
+  "status": "passed",
+  "existing_read_only_grant_confirmed": true,
+  "full_period_read": true,
+  "boundary_recheck": true,
+  "local_statistics_match_server": true,
+  "model_called": false,
+  "record_content_saved": false,
+  "revocation_tested": false
+}

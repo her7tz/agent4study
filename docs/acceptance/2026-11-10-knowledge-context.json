@@ -1,0 +1,13 @@
+{
+  "date": "2026-11-10",
+  "requirements": ["FR-02", "FR-11", "NFR-01", "NFR-02"],
+  "checks": {
+    "short_new_topic_and_greeting_do_not_retrieve_earlier_topic": true,
+    "followup_chain_uses_nearest_explicit_topic_and_stops_on_no_match": true,
+    "references_and_source_ids_pass_in_current_user_payload_only": true,
+    "system_keeps_rules_and_stored_user_message_is_unchanged": true,
+    "exact_json_array_budget_and_deleted_entry_filter": true
+  },
+  "scope": "Local knowledge and conversation stores, synthetic entries, model request captured without an external call. Follow-up classification uses wording rules.",
+  "tests": {"full_suite_passed": 304, "knowledge_and_retry_targeted_passed": 32, "python_3_9_syntax": true}
+}

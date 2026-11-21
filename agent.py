@@ -13,7 +13,6 @@ from typing import Any, Dict, List, Optional
 
 from harness import (
     DEFAULT_MODEL,
-    DeepSeekClient,
     JobStore,
     Settings,
     configure_logging,
@@ -28,6 +27,7 @@ from scheduler import (
     uninstall_macos_launch_agent,
 )
 from capabilities import execute_capability, get_capability, list_capabilities
+from agent_profiles import create_client, resolve_agent
 
 
 MAX_TOOL_ROUNDS = 8
@@ -105,11 +105,11 @@ summarize_video 是视频总结的兼容快捷工具；bash 仅在确实需要�
 不得将机器关机、睡眠或服务退出期间视为仍能执行任务。"""
 
 
-def _system_message() -> str:
+def _system_message(skill_instructions: str = "") -> str:
     return "{}\n本机时间：{}\n注册功能及输入 schema：\n{}".format(
         SYSTEM, time.strftime("%Y-%m-%d %H:%M:%S %Z"),
         json.dumps(list_capabilities(), ensure_ascii=False),
-    )
+    ) + ("\n" + skill_instructions if skill_instructions else "")
 
 
 def _format_capability_result(result: Dict[str, Any]) -> str:
@@ -144,12 +144,6 @@ def _schedule_tool(args: Dict[str, Any], settings: Settings) -> str:
     return "已创建{}定时任务 {}：{}。执行需要本机和后台服务持续运行。".format(definition.title, job_id, when)
 
 
-def _model_for(settings: Settings, model: Optional[str]) -> DeepSeekClient:
-    if model:
-        settings.model = model
-    return DeepSeekClient(settings)
-
-
 def run_bash(command: str) -> str:
     print("\n[Bash] {}".format(command))
     try:
@@ -177,9 +171,9 @@ def run_bash(command: str) -> str:
 
 
 def _run_video_tool(
-    url: str, settings: Settings, client: DeepSeekClient, logger: Any
+    url: str, settings: Settings, logger: Any
 ) -> str:
-    result = execute_capability("video_summary", {"url": url}, settings, logger=logger, client=client)
+    result = execute_capability("video_summary", {"url": url}, settings, logger=logger)
     return "总结已生成：{}\n标题：{}\n文字来源：{}（{}）\n分段：{}\n关键帧：{}\n\n{}".format(
         result["path"],
         result["title"],
@@ -192,16 +186,17 @@ def _run_video_tool(
 
 
 def interactive(settings: Settings, logger: Any) -> int:
-    if not settings.api_key:
+    effective = resolve_agent(settings, "conversation")
+    if not effective.api_key:
         print(
             "请先运行 `python3 agent.py config set-api-key`，或设置 DEEPSEEK_API_KEY。",
             file=sys.stderr,
         )
         return 2
-    client = DeepSeekClient(settings)
-    messages: List[Dict[str, Any]] = [{"role": "system", "content": _system_message()}]
+    client = create_client(effective)
+    messages: List[Dict[str, Any]] = [{"role": "system", "content": _system_message(effective.skill_instructions)}]
     print(
-        "Minimal Agent ({}) — /clear 清空对话，/exit 退出。".format(settings.model)
+        "Minimal Agent ({}) — /clear 清空对话，/exit 退出。".format(effective.model)
     )
     while True:
         try:
@@ -215,11 +210,11 @@ def interactive(settings: Settings, logger: Any) -> int:
             print("再见。")
             return 0
         if user_text == "/clear":
-            messages = [{"role": "system", "content": _system_message()}]
+            messages = [{"role": "system", "content": _system_message(effective.skill_instructions)}]
             print("对话已清空。")
             continue
         turn_start = len(messages)
-        messages[0]["content"] = _system_message()
+        messages[0]["content"] = _system_message(effective.skill_instructions)
         messages.append({"role": "user", "content": user_text})
         try:
             for _ in range(MAX_TOOL_ROUNDS):
@@ -248,7 +243,7 @@ def interactive(settings: Settings, logger: Any) -> int:
                             result = run_bash(args["command"])
                         elif name == "summarize_video" and isinstance(args.get("url"), str):
                             try:
-                                result = _run_video_tool(args["url"], settings, client, logger)
+                                result = _run_video_tool(args["url"], settings, logger)
                             except Exception as exc:
                                 logger.exception("视频总结功能执行失败")
                                 result = "视频总结失败：{}".format(exc)
@@ -256,7 +251,7 @@ def interactive(settings: Settings, logger: Any) -> int:
                             try:
                                 if set(args) - {"capability", "parameters"}:
                                     raise ValueError("执行功能参数包含未知字段。")
-                                outcome = execute_capability(args.get("capability"), args.get("parameters"), settings, logger=logger, client=client)
+                                outcome = execute_capability(args.get("capability"), args.get("parameters"), settings, logger=logger)
                                 result = _format_capability_result(outcome)
                             except Exception as exc:
                                 logger.exception("注册功能执行失败")
@@ -286,12 +281,10 @@ def interactive(settings: Settings, logger: Any) -> int:
 
 def _run_summary(settings: Settings, logger: Any, url: str, model: Optional[str], no_frames: bool, output: Optional[str]) -> int:
     settings.model = model or settings.model
-    client = DeepSeekClient(settings)
     result = execute_capability(
         "video_summary",
         {"url": url, "include_frames": not no_frames},
         settings,
-        client=client,
         output_path=Path(output) if output else None,
         logger=logger,
     )
@@ -301,6 +294,8 @@ def _run_summary(settings: Settings, logger: Any, url: str, model: Optional[str]
 
 
 def _write_secret(settings: Settings, name: str, value: str) -> None:
+    from storage_layout import atomic_text
+
     settings.prepare()
     env_file = settings.data_home / ".env"
     values: Dict[str, str] = {}
@@ -312,11 +307,7 @@ def _write_secret(settings: Settings, name: str, value: str) -> None:
                 values[key.strip()] = old_value.strip()
     values[name] = value
     content = "".join("{}={}\n".format(key, values[key]) for key in sorted(values))
-    env_file.write_text(content, encoding="utf-8")
-    try:
-        env_file.chmod(0o600)
-    except OSError:
-        pass
+    atomic_text(env_file, content)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -494,12 +485,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             print("后台服务已停止并移除。")
             return 0
         store = JobStore(settings.database_path)
-        client = DeepSeekClient(settings)
 
-        def runner(capability: str, parameters: Dict[str, Any], cancellation=None, progress=None) -> Dict[str, Any]:
-            return execute_capability(capability, parameters, settings, logger=logger, client=client, cancellation=cancellation, progress=progress)
+        def runner(capability, parameters, cancellation, progress, current_settings, safe_logger):
+            return execute_capability(capability, parameters, current_settings, logger=safe_logger,
+                                      cancellation=cancellation, progress=progress)
 
-        scheduler = Scheduler(store, settings, runner, logger, controlled_runner=runner)
+        scheduler = Scheduler(store, settings, None, logger, controlled_runner=runner,
+                              settings_provider=lambda: Settings(model=model))
         try:
             scheduler.run_forever()
         except KeyboardInterrupt:

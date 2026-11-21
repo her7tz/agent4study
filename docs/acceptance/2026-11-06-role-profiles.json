@@ -1,0 +1,114 @@
+{
+  "date": "2026-11-06",
+  "scope": "FR-05 production HTTP settings routes -> actual role-specific model clients and request system instructions",
+  "test": "tests.test_http_surface.HTTPSurface.test_saved_role_profiles_reach_actual_clients_and_preserve_running_snapshots",
+  "validation": {
+    "command": "AGENT_HTTP_TESTS=1 .venv/bin/python -m unittest tests.test_http_surface tests.test_agent_contracts -v",
+    "tests": 20,
+    "duration_seconds": 7.389,
+    "result": "OK"
+  },
+  "isolation": {
+    "data": "tempfile.TemporaryDirectory, deleted by unittest cleanup",
+    "model_adapter": "existing PROVIDERS[deepseek] factory temporarily replaced with RecordingClient",
+    "video_reader": "_get_video_material injected synthetic transcript; no external source access",
+    "paper_reader": "production read_paper receives >=200-character pasted synthetic paper text",
+    "network": "loopback HTTP only",
+    "real_secrets_used": false,
+    "user_settings_modified": false
+  },
+  "asserted_actual_clients": [
+    {
+      "role": "conversation",
+      "model": "main-model",
+      "credentials": "global fixture",
+      "skills": [
+        "summary-core"
+      ],
+      "rule_marker": "GLOBAL_PROFILE_RULE"
+    },
+    {
+      "role": "paper_reading",
+      "model": "paper-old",
+      "credentials": "paper fixture",
+      "skills": [
+        "paper-summary"
+      ],
+      "rule_marker": "PAPER_RULE_OLD",
+      "configuration_timing": "already in flight before later HTTP edits; all model stages keep old rule"
+    },
+    {
+      "role": "paper_reading",
+      "model": "paper-new",
+      "credentials": "paper fixture",
+      "skills": [
+        "paper-summary"
+      ],
+      "rule_marker": "PAPER_RULE_NEW",
+      "configuration_timing": "submitted while both slots occupied, asserted queued, reloaded when worker starts"
+    },
+    {
+      "role": "video_learning",
+      "model": "video-model",
+      "credentials": "video fixture",
+      "skills": [],
+      "rule_marker": null,
+      "assertion": "no <skill name= tags in any model system instruction"
+    },
+    {
+      "role": "video_learning",
+      "model": "main-model",
+      "credentials": "global fixture",
+      "skills": [
+        "summary-core"
+      ],
+      "rule_marker": "GLOBAL_PROFILE_RULE",
+      "configuration_timing": "after inherit of model, api_key, skills saved via HTTP"
+    },
+    {
+      "role": "knowledge_archivist",
+      "model": "archive-model",
+      "credentials": "archive fixture",
+      "skills": [
+        "knowledge-extraction"
+      ],
+      "rule_marker": "ARCHIVE_PROFILE_RULE",
+      "trigger": "archive local conversation via HTTP with extract_knowledge=true"
+    }
+  ],
+  "additional_assertions": [
+    "public profiles omit all fixture credentials",
+    "unknown provider rejected with HTTP 400",
+    "queued model metadata updates to actual paper-new model; running model remains paper-old",
+    "each actual request contains selected role rule marker; all tasks and knowledge job complete"
+  ],
+  "native_form_observation": {
+    "environment": "Isolated native desktop app and synthetic backend; no user configuration modified",
+    "role": "paper_reading",
+    "before": "model inherited desktop-synthetic; model input disabled and default checkbox selected",
+    "independent_save": "unchecked model inheritance, saved desktop-paper-independent, observed independent status and unchanged default model in sidebar",
+    "inherit_restore": "restored model inheritance, saved, observed disabled model input with desktop-synthetic and default status",
+    "scope": "Shared native form model controls observed; actual role clients and Skills behavior are covered by the HTTP integration test"
+  },
+  "limitations": [
+    "Native model form was observed separately; every role's API Key and Skill editing controls were not individually clicked",
+    "no external DeepSeek request or real model answer-quality evaluation",
+    "video download/subtitle acquisition and frame analysis not exercised",
+    "full configuration and Skill snapshots remain process-local, not persisted; no change to production behavior"
+  ],
+  "source_sha256": {
+    "tests/test_http_surface.py": "bf4bbd9419372572e764177c66baab4d6af88bcfcbe7c69ed86e2894fb922da4",
+    "agent_profiles.py": "8ddb5604b1afdf663cf3453777142b97ee26da8c5b8bc103a6b97142bdce68a4",
+    "web_server.py": "1810d3d1ce3bf5370cec612934da65b882d1c1cb2a457dba8373058919d7ac6c",
+    "capabilities.py": "5a5f281ab20e594c468724d4afb4eb4ba096c6c7c8d144092345768ef1f0cd80",
+    "subagents.py": "35104130a9d822cb89380296febda26ad7fb84b63d3ea993b5e6f4a6a8a1b757",
+    "business_harnesses.py": "3e361dcc20ded705f3b09c73d5fd560533be05aa14e956369bc0e1507cfb1fd7",
+    "harness_runtime.py": "ded1d1afceb8720e2417baeca7e341732ecc51fa69387b6a9b5330590ef92e3e",
+    "harness.py": "834ed34ad30f29fd18c0342c309332368007be62b20efb8d1fda289aadbe5eec",
+    "conversation.py": "4eea1b4806c640c21a056692eb3b55ff8202be0af76e3addb2de1e3e82720037",
+    "knowledge.py": "7a08c09fe8cf2fe0d490f607d35c43f6f2998ecbbb6be0e024ace9f9e9704367",
+    "paper_summary.py": "380bcf2b878d2496beca4dabbe535943ec917f79715419bcd810582786452cc9",
+    "video_summary.py": "947d977bf6066f7da55a8a1d80f2c6c87f305c118d5effa580e52af56ad937ea",
+    "web/conversation_controls.js": "02bb4488662eddbe8ff0e1ecc2430c7770e2a11b131cc95691d9b21338cba84f"
+  }
+}

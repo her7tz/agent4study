@@ -1,0 +1,16 @@
+{
+  "date": "2026-11-10",
+  "requirements": ["FR-16", "NFR-04"],
+  "baseline_middle_page_edit_reached_model": true,
+  "local_integration": {
+    "actual_site_routes_and_agent_reader": true,
+    "records_in_three_pages": 201,
+    "inconsistent_offsets": [0, 100, 200, 0, 100],
+    "model_calls_on_mismatch": 0,
+    "reports_on_mismatch": 0,
+    "stable_offsets": [0, 100, 200, 0, 100, 200],
+    "stable_statistics_match": true
+  },
+  "scope": "Real Study Log route handlers and Agent reader, loopback services, SQLite with synthetic users and records. Page rechecks are not a transactional snapshot.",
+  "tests": {"full_suite_passed": 307, "study_and_schedule_targeted_passed": 31, "python_3_9_syntax": true}
+}

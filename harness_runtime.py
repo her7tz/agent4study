@@ -7,14 +7,14 @@ import time
 import uuid
 from pathlib import Path
 
-from harness import DeepSeekClient
 from agent_profiles import create_client, redact
 from runtime_control import CancellationToken
 
 
 class ControlledModel:
-    def __init__(self, client, cancellation):
+    def __init__(self, client, cancellation, before_request=None):
         self.client, self.cancellation = client, cancellation
+        self.before_request = before_request
 
     @property
     def settings(self):
@@ -32,18 +32,24 @@ class ControlledModel:
     def last_reasoning(self):
         return getattr(self.client, "last_reasoning", "")
 
-    def stream_chat(self, *args, **kwargs):
+    def _check_request(self):
         self.cancellation.check()
+        if self.before_request:
+            self.before_request(self.cancellation)
+            self.cancellation.check()
+
+    def stream_chat(self, *args, **kwargs):
+        self._check_request()
         kwargs["cancellation"] = self.cancellation
         return self.client.stream_chat(*args, **kwargs)
 
     def chat(self, *args, **kwargs):
-        self.cancellation.check()
+        self._check_request()
         kwargs["cancellation"] = self.cancellation
         return self.client.chat(*args, **kwargs)
 
     def json_chat(self, *args, **kwargs):
-        self.cancellation.check()
+        self._check_request()
         kwargs["cancellation"] = self.cancellation
         return self.client.json_chat(*args, **kwargs)
 
@@ -54,11 +60,12 @@ class SharedHarness:
     The existing WebRuntime/Scheduler own queues and persistence. This object
     is the per-run view of those shared services, not a second scheduler.
     """
-    def __init__(self, context, role):
+    def __init__(self, context, role, *, before_model_request=None):
         self.context, self.settings = context, context.settings
         self.role, self.run_id = role, uuid.uuid4().hex
         self.cancellation = context.cancellation or CancellationToken()
-        self.model = ControlledModel(context.client or create_client(self.settings, timeout=180), self.cancellation)
+        self.model = ControlledModel(context.client or create_client(self.settings, timeout=180),
+                                     self.cancellation, before_model_request)
         directory = self.settings.data_home / "subagent-runs"
         directory.mkdir(parents=True, exist_ok=True)
         self.trace_path = directory / (self.run_id + ".jsonl")

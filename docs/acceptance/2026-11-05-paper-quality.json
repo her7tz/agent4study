@@ -1,0 +1,145 @@
+{
+  "date": "2026-11-05",
+  "scope": "FR-06 and FR-08 public PDF acquisition, business Subagent, model synthesis, saved report and ZIP original verification",
+  "public_material_only": true,
+  "personal_workspace_unchanged": true,
+  "review_method": "Manual comparison against extracted original PDF pages 3-10 and report scope. No model self-score used.",
+  "runs": [
+    {
+      "date": "2026-11-05",
+      "status": "pipeline_passed_quality_review_incomplete",
+      "input": "https://arxiv.org/abs/1706.03762",
+      "provider": "deepseek",
+      "model": "deepseek-flash",
+      "seconds": 305.7,
+      "report": ".local/acceptance/paper-20261105/paper_summary/paper_summary_20261105-143434_c20e655f.md",
+      "report_chars": 9674,
+      "original_sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+      "subagent": {
+        "role": "paper_reading",
+        "operation": "paper_summary",
+        "run_id": "c20e655f26c248398dcec45c1f55f93b",
+        "verified": true
+      },
+      "summary_processing": {
+        "version": 1,
+        "source_blocks": 15,
+        "source_characters": 45798,
+        "chunks": 4,
+        "merge_passes": 1,
+        "model_calls": 5,
+        "all_chunks_processed": true,
+        "checks": "structure_source_ids_and_declared_coverage_only",
+        "rendered_units": 14,
+        "rendering_check": "declared_unit_ids_only"
+      },
+      "source_scope": "已读取 PDF 的可提取文字；旋转文字的排版与阅读顺序可能不准确。图像、公式及复杂表格未做视觉识别。",
+      "zip_preserves_markdown_and_original_pdf": true,
+      "quality_review": {
+        "status": "needs_revision",
+        "checks_passed": [
+          "15 source pages processed",
+          "base architecture and training values",
+          "41.8 versus 41.0 source conflict retained",
+          "parsing table versus author claim distinguished",
+          "figure captions distinguished from visual inspection"
+        ],
+        "issues": [
+          {
+            "section": "2.2",
+            "source_pages": [
+              4
+            ],
+            "finding": "The unscaled qualifier was attached to additive attention, instead of dot-product attention."
+          },
+          {
+            "section": "2.5",
+            "source_pages": [
+              6,
+              9
+            ],
+            "finding": "Paragraph cites page 6 but also includes positional-embedding ablation values from page 9."
+          },
+          {
+            "section": "2.3",
+            "finding": "Final prose exposes internal chunk-completion process."
+          }
+        ]
+      },
+      "report_sha256": "2f643a082fdfa90221617580e3e2f93afd588bfa1cb47274bad4beecc1662220"
+    },
+    {
+      "date": "2026-11-05",
+      "status": "pipeline_passed_quality_review_incomplete",
+      "input": "https://arxiv.org/abs/1706.03762",
+      "provider": "deepseek",
+      "model": "deepseek-flash",
+      "seconds": 359.4,
+      "report": ".local/acceptance/paper-20261105/paper_summary/paper_summary_20261105-144201_820f1560.md",
+      "report_chars": 9954,
+      "original_sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+      "subagent": {
+        "role": "paper_reading",
+        "operation": "paper_summary",
+        "run_id": "820f156060584f679a26a28eadda7df5",
+        "verified": true
+      },
+      "summary_processing": {
+        "version": 1,
+        "source_blocks": 15,
+        "source_characters": 45798,
+        "chunks": 4,
+        "merge_passes": 1,
+        "model_calls": 5,
+        "all_chunks_processed": true,
+        "checks": "structure_source_ids_and_declared_coverage_only",
+        "rendered_units": 13,
+        "rendering_check": "declared_unit_ids_only"
+      },
+      "source_scope": "已读取 PDF 的可提取文字；旋转文字的排版与阅读顺序可能不准确。图像、公式及复杂表格未做视觉识别。",
+      "zip_preserves_markdown_and_original_pdf": true,
+      "quality_review": {
+        "status": "partially_improved_not_accepted",
+        "resolved_from_first_run": [
+          "Comparison qualifier correctly belongs to unscaled dot-product attention.",
+          "Positional-embedding ablation numbers are now under page 9.",
+          "Multi-head explanation no longer narrates source-chunk completion."
+        ],
+        "retained_correct_behavior": [
+          "41.8 versus 41.0 conflict remains explicit.",
+          "Figure-caption evidence is separated from visual verification.",
+          "newstest2013 ablation and newstest2014 test results are separated."
+        ],
+        "remaining_issues": [
+          {
+            "section": "3, three attention uses",
+            "source_pages": [
+              5
+            ],
+            "finding": "The paragraph still cites page 3 alone for details from page 5."
+          },
+          {
+            "section": "7.2 and 9.2, scale ablations",
+            "source_pages": [
+              9
+            ],
+            "finding": "The multi-factor attribution warning is generalized to scale rows, including rows varying N alone."
+          }
+        ],
+        "limitations": [
+          "One public paper, one model run per rule version; not a controlled broad quality benchmark.",
+          "No visual verification of table layout or formula rendering.",
+          "The revised report is longer; no demonstrated concision improvement."
+        ]
+      },
+      "report_sha256": "b7c21dacf3ea4f2ebccc1b20656c4d831aedaecb1964ba387433b64d7e26f3ee"
+    }
+  ],
+  "suite": {
+    "tests": 208,
+    "failures": 0,
+    "skips": 0,
+    "seconds": 7.283
+  },
+  "image_only_pdf_regression": "Real PDF image XObject with no text layer is rejected with OCR explanation; mixed document identifies missing page text."
+}

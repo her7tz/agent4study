@@ -1,0 +1,25 @@
+{
+  "date": "2026-11-18",
+  "bert_full_pipeline": {
+    "source": "Saved 16-page public BERT PDF and previously reviewed paper evidence",
+    "minutes": 5,
+    "language": "en",
+    "slides": 8,
+    "venue_text": "NAACL-HLT 2019",
+    "venue_source": {"kind": "pdf_first_page", "page": 1, "quote": "Proceedings of NAACL-HLT 2019, pages 4171–4186"},
+    "authors_source": {"kind": "pdf_metadata", "field": "/Author"},
+    "venue_and_authors_visible_once": true,
+    "venue_source_in_notes_and_plan": true,
+    "verified_originals": 1,
+    "numbered_bullets_reviewed": 9,
+    "layout_findings": 0,
+    "sha256": "44da815b9f639a3b0163a8d74cfc5a1f622ceb5e0e283a4afb45c2f14bab8762"
+  },
+  "local_renders": {
+    "bert_extended_cover_fixed": true,
+    "arxiv_id_separate_from_venue": true,
+    "conference_abstract_retains_abstract_only_notice_and_nonduplicate_venue": true,
+    "full_200_character_cover_title_retained": true
+  },
+  "regression": {"python_tests": 396, "failures": 0, "skipped": 0, "includes_local_http": true}
+}

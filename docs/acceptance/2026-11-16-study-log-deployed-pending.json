@@ -1,0 +1,25 @@
+{
+  "date": "2026-11-16",
+  "requirements": ["FR-16"],
+  "scope": "部署站点与真实 Agent 适配器。只创建并撤销一条未批准的临时配对。未使用现有账号授权、个人学习数据或外部模型。",
+  "deployed_checks": {
+    "anonymous_browser_approval_route": {"status": 307, "redirect_path": "/signin-with-chatgpt"},
+    "anonymous_api_errors_returned_json": true,
+    "anonymous_api_status_by_resource": {"authorizations": 401, "session": 401, "records": 401, "projects": 401, "analytics": 401},
+    "temporary_pairing_created": true,
+    "pairing_status_before_approval": "pending",
+    "pending_reads": {"records": 401, "projects": 401, "analytics": 401},
+    "study_log_reported_revoked": true,
+    "temporary_local_credential_removed": true,
+    "revoked_test_token_reads": {"records": 401, "projects": 401, "analytics": 401},
+    "adapter_recognized_invalid_undeclared_test_token": 401
+  },
+  "gateway_response_regression": {
+    "original_refresh_or_disconnect_cleared_credential": true,
+    "generic_html_401_preserves_local_credential": true,
+    "generic_json_401_preserves_local_credential": true,
+    "known_application_denial_is_recognized": true
+  },
+  "tests": {"full_suite_passed": 332, "full_suite_skipped": 0, "agent_study_checks_passed": 26, "site_authorization_checks_passed": 4},
+  "remaining_deployed_acceptance": "使用真实站点账号批准一条专用连接，核对只读查询后撤销，并再次确认拒读。"
+}

@@ -1,0 +1,80 @@
+{
+  "date": "2026-11-15",
+  "requirements": ["FR-07"],
+  "video": "https://www.youtube.com/watch?v=aircAruvnKk",
+  "review_reference": "https://www.3blue1brown.com/lessons/neural-networks/",
+  "model": "deepseek-flash",
+  "initial_task": {
+    "scope": "实际工作台的 HTTP 提交、游客取材、真实模型、保存与 HTTP 下载。使用临时成果目录和内置 Skills。",
+    "elapsed_seconds": 179.7,
+    "caption_language": "zh",
+    "caption_cues": 231,
+    "source_blocks": 13,
+    "knowledge_units": 6,
+    "sections": 6,
+    "mermaid_diagrams": 5,
+    "all_units_linked_to_caption_blocks": true,
+    "all_candidate_frames_in_linked_caption_intervals": true,
+    "frames_extracted": 8,
+    "frames_saved": 7,
+    "zip_files_matching_saved_bytes": 9
+  },
+  "content_checks": [
+    "输入尺寸、示例隐藏层和十个输出节点符合原课，保留示例的适用范围。",
+    "分层特征识别写成教学设想，保留其尚待训练结果验证的条件。",
+    "权重、偏置与激活顺序，以及向量和矩阵的整层表达均与原课一致。",
+    "正文保留字幕约 13,000 个参数的精度，原课程讲义给出 13,002。",
+    "片尾关于 ReLU 的补充保留，学习算法仍标为后续课程内容。"
+  ],
+  "isolated_frame_replay": {
+    "scope": "使用首次成稿保留的七张原图、对应字幕和同一份章节草稿。首次运行舍弃的第八张未纳入复测。",
+    "elapsed_seconds": 18.7,
+    "images_checked": 7,
+    "images_retained": 6,
+    "reviewed_differences": [
+      "数字 9 拆成环与竖笔的原图，此前被描述成 28×28 像素网格，逐图复测与原图一致。",
+      "圆环由多笔画组成的原图，此前被描述成数字 9 的拆解，逐图复测与原图一致。",
+      "仅说明课程安排的画面被省略。",
+      "中间复测曾把 ReLU 的变量改名当作公式冲突，最终复测没有附加冲突提示。"
+    ]
+  },
+  "full_rerun_after_frame_fix": {
+    "scope": "使用同一公开课和另一个临时工作区，从游客字幕经真实模型重新生成报告。ZIP 通过实际下载接口读取，离线 HTML 通过视频页面下载。",
+    "elapsed_seconds": 197.3,
+    "caption_cues": 231,
+    "source_blocks": 13,
+    "knowledge_units": 8,
+    "sections": 8,
+    "mermaid_diagrams": 8,
+    "all_units_linked_to_caption_blocks": true,
+    "all_candidate_frames_in_linked_caption_intervals": true,
+    "frames_extracted": 8,
+    "frames_saved": 6,
+    "zip_files_matching_saved_bytes": 8,
+    "offline_html": {
+      "rendered_diagrams_before_label_fix": 2,
+      "rendered_diagrams_after_label_fix": 8,
+      "embedded_images_matching_saved_bytes": 6,
+      "evidence_download_matching_saved_bytes": true,
+      "service_stopped_before_open": true,
+      "scripts": 0
+    },
+    "remaining_observation": "逐图核对时，一张原图未显示输出层节点，成稿图注仍写出十个输出节点。"
+  },
+  "independent_observation_replay": {
+    "scope": "真实模型复测已保存的公开课原图。每张只输入图片取得观察说明，再使用纯文字做一次候选批量筛选。",
+    "first_batch_images": 6,
+    "first_batch_retained": 3,
+    "first_batch_elapsed_seconds": 30.9,
+    "focused_batch_images": 4,
+    "focused_batch_retained": 4,
+    "focused_batch_elapsed_seconds": 19.0,
+    "focused_batch_results": [
+      "此前补写输出层的画面，独立观察仅报告可见的三列节点和 784 标签，未补出输出层。它在六张的复测中被略去，在四张的复测中按该说明保留。",
+      "确实显示输出层的画面，观察说明辨认出十个输出节点及高亮的数字 7。",
+      "加权和与 ReLU 的原图保留可辨认公式。ReLU 的等价写法没有触发冲突提示。"
+    ],
+    "tests": {"full_suite_passed": 330, "full_suite_skipped": 0, "video_targeted_passed": 31}
+  },
+  "tests": {"full_suite_passed": 329, "full_suite_skipped": 0, "video_targeted_passed": 30}
+}

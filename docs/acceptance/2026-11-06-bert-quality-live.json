@@ -1,0 +1,68 @@
+{
+  "date": "2026-11-06",
+  "status": "pipeline_and_five_predeclared_content_checks_passed",
+  "input": "https://aclanthology.org/N19-1423.pdf",
+  "source_kind": "full_official_public_pdf",
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "seconds": 668.3,
+  "report": ".local/acceptance/bert-20261106/paper_summary/paper_summary_20261106-180904_bead51c4.md",
+  "original_sha256": "987545ffb087f1ece898142c403a516baeabeb70ce19089397fac6f7db12c3d4",
+  "pages": 16,
+  "summary_processing": {
+    "version": 1,
+    "source_blocks": 16,
+    "source_characters": 88250,
+    "chunks": 6,
+    "merge_passes": 2,
+    "model_calls": 9,
+    "all_chunks_processed": true,
+    "checks": "structure_source_ids_and_declared_coverage_only",
+    "rendered_units": 13,
+    "rendering_check": "inline_and_declared_unit_ids"
+  },
+  "zip_preserves_original_and_markdown": true,
+  "predeclared_review": [
+    "Table 6: L=6 to L=12 with H=768 and A=12 changes depth alone",
+    "That comparison: LM PPL 4.68 to 3.99 and MNLI-m 81.9 to 84.4; distinct numerical directions",
+    "At L=12, H=768 to 1024 and A=12 to 16 changes two variables; no independent width or head attribution",
+    "Preserve held-out LM PPL, downstream Dev accuracy and five fine-tuning restart averages",
+    "Cite the experiment description and table locations; no universal guarantee on arbitrary tasks"
+  ],
+  "quality_review": {
+    "method": "Manual comparison of original PDF physical pages 8-9, reader source blocks, knowledge unit k11 and final report section 6.2; no model self-score",
+    "checks": [
+      {
+        "criterion": 1,
+        "result": "passed_in_table",
+        "evidence": "Complete 6/768/12 and 12/768/12 rows preserve depth-only comparison; other depth-only pairs are explicitly explained without blanket confounding warning",
+        "qualification": "The predeclared 6-to-12 pair is not separately explained in a prose sentence"
+      },
+      {
+        "criterion": 2,
+        "result": "passed",
+        "evidence": "PPL 4.68 -> 3.99 and MNLI-m 81.9 -> 84.4 preserved; numerical and quality directions distinguished"
+      },
+      {
+        "criterion": 3,
+        "result": "passed",
+        "evidence": "12/768/12 -> 12/1024/16 explicitly changes both hidden width and head count; attribution limitation attached to that comparison"
+      },
+      {
+        "criterion": 4,
+        "result": "passed",
+        "evidence": "Held-out LM PPL, downstream Dev accuracy and five fine-tuning restart averages retained"
+      },
+      {
+        "criterion": 5,
+        "result": "passed",
+        "evidence": "PDF pages 8 and 9 cited, conclusions limited to sufficient pretraining and selected Table 6 tasks"
+      }
+    ],
+    "limitations": [
+      "The review covers the five predeclared checks, not every statement in the full report",
+      "This independent material does not close the prior Transformer N-only attribution case",
+      "Application model used extracted text only; no claim of visual formula or table analysis"
+    ]
+  }
+}

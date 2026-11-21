@@ -1,0 +1,22 @@
+{
+  "date": "2026-11-09",
+  "requirements": ["FR-18"],
+  "method": "Headless Chrome, real local Agent API and local HTTP simulation of NapCat. The Agent process was replaced twice on the same port. QQ records, model response and bridge receipts were synthetic.",
+  "baseline": {"explicit_reconnect_reused_stale_workbench_token": true},
+  "fixed": {
+    "group_history_excluded_other_group_and_deduplicated": true,
+    "summary_cited_selected_message_and_disclosed_unread_limit": true,
+    "cancelled_preview_send_count": 0,
+    "confirmed_plain_text_send_count": 1,
+    "bridge_receipt_not_labeled_as_platform_confirmation": true,
+    "unknown_receipt_send_attempts": 1,
+    "duplicate_and_cancelled_tickets_rejected": true,
+    "restarting_backend_or_replacing_connection_clears_stale_material": true,
+    "manual_reconnect_without_page_reload": true,
+    "direct_connect_fetches_fresh_token_after_restart": true,
+    "send_count_unchanged_by_reconnect": true,
+    "disconnected_session_read_status": 409
+  },
+  "tests": {"full_suite_passed": 282, "full_suite_skipped": 0},
+  "limits": "Real NapCat login, platform visibility, platform unread boundaries and delivery receipts were outside the test."
+}

@@ -1,16 +1,17 @@
 """Non-secret account session metadata and recoverable material handoffs."""
-import json
 import re
 import sqlite3
 import time
 import uuid
-from pathlib import Path
 from urllib.parse import urlsplit,urlunsplit,parse_qsl,urlencode
 from web_research import public_url, _addresses
-from storage_layout import atomic_text
 
 class SessionError(ValueError):
     status=400
+
+
+class SessionClosed(SessionError):
+    status = 409
 
 # Automated acquisition is opt-in per adapter; unknown publishers use manual import.
 ADAPTERS = {
@@ -18,6 +19,8 @@ ADAPTERS = {
     'openreview.net': {'id':'openreview','title':'OpenReview','automatic':True},
     'arxiv.org': {'id':'arxiv','title':'arXiv','automatic':True},
 }
+
+MATERIAL_IMPORTED_NOTE = '论文 PDF 已导入，可继续总结。'
 
 
 def safe_source(url):
@@ -57,6 +60,7 @@ class SiteSessions:
         # Store a clean initial page, never redirect OAuth tokens or browser cookies.
         clean=safe_source(url);adapter=adapter_for(clean)
         with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
             previous=db.execute("SELECT * FROM site_sessions WHERE task_id=? AND status NOT IN ('cleared','clear_pending') ORDER BY created_at DESC LIMIT 1",(task_id,)).fetchone() if task_id else None
             if previous:return self.public(previous)
             session_id=uuid.uuid4().hex;now=time.time()
@@ -73,17 +77,33 @@ class SiteSessions:
     def list(self):
         with self.connect() as db:return [self.public(row) for row in db.execute('SELECT * FROM site_sessions ORDER BY updated_at DESC LIMIT 100')]
 
+    def accept_material(self, session_id, attach):
+        """Serialize import with other imports and session clearing."""
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT * FROM site_sessions WHERE id=?', (session_id,)).fetchone()
+            if row is None or row['status'] in {'cleared', 'clear_pending'}:
+                raise SessionClosed('会话已退出，请重新打开登录窗口。')
+            metadata, task = attach(self.public(row))
+            db.execute("UPDATE site_sessions SET status='material_imported',task_id=?,note=?,updated_at=? WHERE id=?",
+                       (task['id'], MATERIAL_IMPORTED_NOTE, time.time(), session_id))
+        return metadata, task
+
     def update(self,session_id,status,note=''):
         self.get(session_id)
-        if status not in {'session_saved','needs_login','material_imported','clear_pending','cleared','access_failed'}:raise SessionError('会话状态无效。')
+        if status not in {'session_saved','needs_login','clear_pending','cleared','access_failed'}:raise SessionError('会话状态无效。')
         # The client reports state, not proof of subscription or successful authentication.
         notes={'session_saved':'浏览器会话已保存，访问权限由网站判断。','needs_login':'请在专用窗口完成登录或验证。',
-            'material_imported':'论文 PDF 已导入，可继续总结。','clear_pending':'等待桌面客户端清除浏览器会话。',
+            'clear_pending':'等待桌面客户端清除浏览器会话。',
             'cleared':'浏览器会话已清除。','access_failed':'未取得有效论文 PDF，请完成验证或手动上传。'}
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
-            current=db.execute('SELECT status FROM site_sessions WHERE id=?',(session_id,)).fetchone()[0]
-            if current=='cleared':return self.public(db.execute('SELECT * FROM site_sessions WHERE id=?',(session_id,)).fetchone())
-            if current in {'cleared','clear_pending'} and status not in {'clear_pending','cleared'}: raise SessionError('会话已退出，不能继续使用。')
+            row = db.execute('SELECT * FROM site_sessions WHERE id=?', (session_id,)).fetchone()
+            current = row['status']
+            clearing = status in {'clear_pending', 'cleared'}
+            if current == 'cleared' or (current == 'material_imported' and not clearing):
+                return self.public(row)
+            if current == 'clear_pending' and not clearing:
+                raise SessionError('会话已退出，不能继续使用。')
             db.execute('UPDATE site_sessions SET status=?,note=?,updated_at=? WHERE id=?',(status,notes[status],time.time(),session_id))
         return self.get(session_id)

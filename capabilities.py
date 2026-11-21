@@ -16,14 +16,15 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from harness import DeepSeekClient, Settings
+from harness import Settings
+from model_client import ModelClient
 
 
 @dataclass
 class CapabilityContext:
     settings: Settings
     logger: Any = None
-    client: Optional[DeepSeekClient] = None
+    client: Optional[ModelClient] = None
     progress: Optional[Callable[[str], None]] = None
     output_path: Optional[Path] = None
     cancellation: Any = None
@@ -93,12 +94,18 @@ class Capability:
     input_schema: Dict[str, Any]
     executor: Callable[[Dict[str, Any], CapabilityContext], Dict[str, Any]]
     validator: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None
+    settings_role: Optional[str] = None
 
     def metadata(self) -> Dict[str, Any]:
         from agent_registry import registry as agents
-        try:owner=agents.owner(self.id).id
-        except ValueError:owner=None
+        if self.settings_role is not None:
+            owner = None
+        else:
+            try:owner=agents.owner(self.id).id
+            except ValueError:owner=None
         return {"agent_id":owner,
+            "settings_role": self.settings_role or owner,
+            "owner_type": "main" if self.settings_role is not None else "subagent",
             "id": self.id,
             "title": self.title,
             "description": self.description,
@@ -124,6 +131,8 @@ class CapabilityRegistry:
             raise ValueError("功能已经注册：{}。".format(capability.id))
         if capability.input_schema.get("type") != "object":
             raise ValueError("功能输入 schema 必须是 object。")
+        if capability.settings_role is not None and capability.settings_role not in ("global", "conversation"):
+            raise ValueError("主 Agent 功能的配置角色只能是 global 或 conversation。")
         self._capabilities[capability.id] = capability
 
     def get(self, capability_id: str) -> Capability:
@@ -144,14 +153,13 @@ class CapabilityRegistry:
             context.cancellation.check()
         from storage_layout import feature_directory
         from agent_profiles import resolve_agent
-        from agent_registry import registry as agents
-        scoped_settings = copy.copy(resolve_agent(context.settings, agents.owner(capability_id).id))
+        scoped_settings = copy.copy(resolve_agent(context.settings, capability_settings_role(capability_id)))
         scoped_settings.library_root = getattr(context.settings, "library_root", context.settings.output_dir)
         scoped_settings.output_dir = feature_directory(context.settings.output_dir, capability_id)
-        supplied = context.client
-        if isinstance(supplied, DeepSeekClient):
-            supplied = None
-        context = replace(context, settings=scoped_settings, client=supplied)
+        # Normal entry points let the workflow construct a role-specific client.
+        # An explicitly injected client is preserved for embedding and testing,
+        # regardless of which provider class implements the model contract.
+        context = replace(context, settings=scoped_settings)
         result = capability.executor(normalized, context)
         if context.cancellation:
             context.cancellation.check()
@@ -222,7 +230,12 @@ registry.register(
 
 
 def _execute_paper(parameters, context):
+    from paper_summary import MaterialRequired
+    from site_sessions import adapter_for
     from subagents import run_business_subagent
+
+    if parameters.get("url") and adapter_for(parameters["url"])["id"] == "ieee":
+        raise MaterialRequired("IEEE Xplore 需要人工登录下载 PDF，然后在原任务中导入继续。")
     return run_business_subagent("paper_summary", parameters, context)
 
 
@@ -239,8 +252,33 @@ registry.register(Capability(
         "paper_text": {"type": "string", "title": "论文原文", "maxLength": 300000, "format": "multiline", "description": "粘贴可读取的原文，至少200字；与链接、附件三选一"},
         "upload_id": {"type": "string", "title": "PDF 附件", "format": "paper-upload", "maxLength": 32, "description": "已上传的本地 PDF；与链接、原文三选一"},
         "title": {"type": "string", "title": "标题提示", "maxLength": 200},
+        "include_presentation": {"type": "boolean", "title": "同时生成组会汇报 PPT", "default": False},
+        "presentation_minutes": {"type": "integer", "title": "汇报时长（分钟）", "minimum": 5, "maximum": 60, "default": 20},
+        "presentation_language": {"type": "string", "title": "PPT 语言", "enum": ["zh", "en"], "default": "zh"},
         "source_url": {"type": "string", "title": "关联的原论文链接", "maxLength": 4096}},
         "additionalProperties": False}, executor=_execute_paper, validator=_validate_paper))
+
+
+def _execute_study_report(parameters, context):
+    from study_report import execute_study_report
+    return execute_study_report(parameters, context)
+
+
+def _validate_study_report(parameters):
+    from study_report import validate_study_report
+    return validate_study_report(parameters)
+
+
+registry.register(Capability(
+    id="study_report", title="Study Log 学习周报",
+    description="只读查询已授权的 Study Log，分析指定周或日期范围的学习记录和项目进展，生成并自动保存报告；由主 Agent 执行。",
+    input_schema={"type": "object", "properties": {
+        "period": {"type": "string", "title": "报告范围", "enum": ["this_week", "last_week", "range"], "default": "this_week"},
+        "start_date": {"type": "string", "title": "开始日期", "pattern": r"^\d{4}-\d{2}-\d{2}$", "description": "自定义范围时必填，含当天，格式 YYYY-MM-DD"},
+        "end_date": {"type": "string", "title": "结束日期", "pattern": r"^\d{4}-\d{2}-\d{2}$", "description": "自定义范围时必填，含当天，格式 YYYY-MM-DD"},
+        "project_id": {"type": "integer", "title": "项目编号", "minimum": 1}},
+        "additionalProperties": False}, executor=_execute_study_report,
+    validator=_validate_study_report, settings_role="conversation"))
 
 
 def list_capabilities() -> List[Dict[str, Any]]:
@@ -249,6 +287,15 @@ def list_capabilities() -> List[Dict[str, Any]]:
 
 def get_capability(capability_id: str) -> Capability:
     return registry.get(capability_id)
+
+
+def capability_settings_role(capability_id: str) -> str:
+    """Main-owned workflows use a main profile without becoming Subagents."""
+    capability = get_capability(capability_id)
+    if capability.settings_role is not None:
+        return capability.settings_role
+    from agent_registry import registry as agents
+    return agents.owner(capability_id).id
 
 
 def validate_parameters(capability_id: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
@@ -260,7 +307,7 @@ def execute_capability(
     parameters: Dict[str, Any],
     settings: Settings,
     logger: Any = None,
-    client: Optional[DeepSeekClient] = None,
+    client: Optional[ModelClient] = None,
     progress: Optional[Callable[[str], None]] = None,
     output_path: Optional[Path] = None,
     cancellation: Any = None,

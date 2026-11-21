@@ -1,0 +1,27 @@
+{
+  "date": "2026-11-09",
+  "requirements": ["FR-03", "FR-14"],
+  "method": "Actual loopback HTTP fixture with controlled short body, slow body, redirects and cancellation. The fixture substituted the destination only in the test. Normal reading was also checked against the public Python documentation.",
+  "fixture_total_budget_seconds": 0.24,
+  "baseline": {
+    "truncated_transport_claimed_as_complete_page": true,
+    "slow_body_accepted_after_seconds": 0.740,
+    "redirect_chain_accepted_after_seconds": 0.316,
+    "cancel_after_signal_seconds": 0.681
+  },
+  "fixed": {
+    "truncated_transport_recorded_as_failed": true,
+    "slow_body_stopped_after_seconds": 0.250,
+    "redirect_chain_stopped_after_seconds": 0.243,
+    "cancel_after_signal_seconds_rounded_to_milliseconds": 0.0,
+    "premature_eof_covered_for_declared_length_and_chunked_body": true
+  },
+  "public_page": {
+    "url": "https://docs.python.org/3/library/asyncio-task.html",
+    "read_ranges": [[0, 2000]],
+    "available_chars": 44097,
+    "reported_as_excerpt": true
+  },
+  "tests": {"full_suite_passed": 284, "full_suite_skipped": 0, "web_transport_targeted_passed": 29},
+  "limits": "This run covered webpage transport and source classification. It did not retest the live search providers. The host's synchronous DNS lookup cannot be interrupted by the socket deadline."
+}

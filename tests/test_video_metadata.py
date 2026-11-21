@@ -17,6 +17,7 @@ from video_summary import (
     _get_metadata,
     _get_video_material,
     _ytdlp_source,
+    validate_video_url,
 )
 
 
@@ -50,6 +51,38 @@ class VideoMetadataTests(unittest.TestCase):
         self.assertIn("--ignore-no-formats-error", arguments)
         self.assertIn(URL, arguments)
 
+    def test_explicit_bilibili_part_must_be_positive_and_unambiguous(self):
+        for query in ("p=0", "p=-1", "p=", "p=2&p=3", "p=2.5"):
+            with self.subTest(query=query), self.assertRaisesRegex(ValueError, "分集"):
+                validate_video_url(URL + "?" + query)
+        self.assertEqual(validate_video_url(URL + "?p=02&from=test"), URL + "?p=02&from=test")
+
+    @patch("video_summary._run_ytdlp")
+    def test_explicit_part_rejects_wrong_recording_instead_of_using_first(self, run):
+        for info in ({"id": "BV1it411g7CX_p1"}, {"id": "BV1Ybpd6gECu_p2"},
+                     {"_type": "playlist", "entries": [{"id": "BV1it411g7CX_p1"}]}):
+            with self.subTest(info=info), self.assertRaisesRegex(RuntimeError, "指定分集"):
+                run.return_value = subprocess.CompletedProcess([], 0, json.dumps(info), "")
+                _get_metadata(URL + "?p=2")
+
+    @patch("video_summary._run_ytdlp")
+    def test_explicit_part_canonical_source_uses_confirmed_metadata(self, run):
+        info = {"id": "BV1it411g7CX_p2", "webpage_url": URL, "formats": FORMATS}
+        run.return_value = subprocess.CompletedProcess([], 0, json.dumps(info), "")
+        material = _get_metadata(URL + "?p=02&spm_id_from=fixture")
+        self.assertEqual(material["webpage_url"], URL + "?p=2")
+        self.assertEqual(material["formats"], FORMATS)
+
+    @patch("video_summary._run_ytdlp")
+    def test_explicit_part_checks_readable_material_and_accepts_caption_only(self, run):
+        info = {"id": "BV1it411g7CX_p2", "formats": [], "subtitles": {"danmaku": [{"ext": "xml"}]}}
+        run.return_value = subprocess.CompletedProcess([], 0, json.dumps(info), "")
+        with self.assertRaisesRegex(RuntimeError, "指定分集没有可读"):
+            _get_metadata(URL + "?p=2")
+        info["subtitles"]["zh"] = [{"ext": "srt"}]
+        run.return_value = subprocess.CompletedProcess([], 0, json.dumps(info), "")
+        self.assertEqual(_get_metadata(URL + "?p=2")["webpage_url"], URL + "?p=2")
+
     def test_danmaku_and_unsupported_caption_formats_are_excluded(self):
         info = {"subtitles": {
             "danmaku": [{"ext": "xml"}],
@@ -59,6 +92,25 @@ class VideoMetadataTests(unittest.TestCase):
         self.assertEqual(_choose_caption(info), ("en", True))
         self.assertIsNone(_choose_caption({"subtitles": {"danmaku": [{"ext": "xml"}]}}))
         self.assertIsNone(_choose_caption({"subtitles": {"zh": [None, "bad"]}}))
+
+    def test_broken_manual_caption_uses_same_language_automatic_track_before_asr(self):
+        tracks = {"zh": [{"ext": "json3"}]}
+        info = {"subtitles": tracks, "automatic_captions": tracks}
+        attempts = []
+        def download(url, language, folder, info, manual):
+            attempts.append((language, manual, folder))
+            path = folder / "video.zh.json3"
+            events = [None] if manual else [{"tStartMs": 1000, "dDurationMs": 2000, "segs": [{"utf8": "可用字幕"}]}]
+            path.write_text(json.dumps({"events": events}))
+            return path
+        with tempfile.TemporaryDirectory() as tmp, patch("video_summary._get_metadata", return_value=info), \
+             patch("video_summary._download_caption", side_effect=download), patch("video_summary._download_audio") as audio:
+            result = _get_video_material(URL, Path(tmp))
+        self.assertEqual([(lang, manual) for lang, manual, _ in attempts], [("zh", True), ("zh", False)])
+        self.assertNotEqual(attempts[0][2], attempts[1][2])
+        self.assertEqual(result["source"], "平台自动字幕")
+        self.assertEqual(result["transcript"], [{"start": 1, "end": 3, "text": "可用字幕"}])
+        audio.assert_not_called()
 
     def test_supported_chinese_automatic_caption_keeps_language_priority(self):
         info = {
@@ -151,7 +203,9 @@ class VideoMetadataTests(unittest.TestCase):
                 if "--dump-single-json" in arguments:
                     return subprocess.CompletedProcess([], 0, json.dumps(info), "")
                 self.cached_info(arguments, info)
-                (folder / "BV1it411g7CX.zh.srt").write_text(CAPTION, encoding="utf-8")
+                template = arguments[arguments.index("-o") + 1]
+                destination = Path(template % {"id": info["id"], "ext": "zh.srt"})
+                destination.write_text(CAPTION, encoding="utf-8")
                 return subprocess.CompletedProcess([], 0, "", "")
 
             with patch("video_summary._run_ytdlp", side_effect=run) as download, \

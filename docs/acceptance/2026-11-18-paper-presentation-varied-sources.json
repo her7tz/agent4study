@@ -1,0 +1,30 @@
+{
+  "date": "2026-11-18",
+  "full_pdf": {
+    "paper": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+    "original_pages": 16,
+    "presentation_minutes": 15,
+    "slides_after_number_review": 30,
+    "required_topics_present": 10,
+    "method_groups": 4,
+    "ablation_groups": 2,
+    "verified_crops_embedded": 7,
+    "number_review": {"batches": 3, "checked_bullets": 49, "changes": 4},
+    "original_table_comparison": {"pdf_page": 7, "table": 2, "metric": "SQuAD 1.1 test EM/F1",
+      "single_with_TriviaQA": "85.1/91.8", "ensemble_with_TriviaQA": "87.4/93.2", "corrected_slide": 16},
+    "bounds_findings": 0,
+    "limits": "Reused the previous checked paper notes and visual crops; only selected claims were checked manually. Some crops retain adjacent source content."
+  },
+  "abstract_only": {
+    "paper": "Code Comment Inconsistency Detection and Rectification Using a Large Language Model",
+    "presentation_minutes": 5,
+    "slides": 8,
+    "scope_visible_on_all_slides": true,
+    "required_topics_present": 10,
+    "manual_comment_update_results": {"Just-in-time": "65.0%", "Post Hoc": "55.9%"},
+    "embedded_originals": 0,
+    "bounds_findings": 0,
+    "limits": "This export preceded the numeric review stage; the two percentages were checked directly against the stored conference abstract."
+  },
+  "regression": {"python_tests": 392, "failures": 0, "skipped": 0, "includes_local_http": true}
+}

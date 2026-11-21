@@ -1,0 +1,27 @@
+{
+  "date": "2026-11-09",
+  "requirements": ["FR-01", "FR-02", "NFR-01"],
+  "browser_recovery": {
+    "browser": "headless Chrome",
+    "backend_processes_replaced_on_same_port": true,
+    "old_request_token_status": 403,
+    "same_conversation_after_restart": true,
+    "interrupted_partial_reply_visible_once": true,
+    "unsent_draft_preserved": true,
+    "page_reloaded": false,
+    "model_calls_before_manual_followup": 1,
+    "model_calls_in_total": 2,
+    "scope": "Real local backend processes and Chrome, with an injected desktop reconnect event and synthetic model. Native GUI launch was outside this test."
+  },
+  "desktop_archive": {
+    "sha256": "846d7b559c49faaacb2f5bd8cc265d1b0b5997eef50a0ea3e3c8c135348cb9a6",
+    "strict_codesign_after_extraction": true,
+    "workspace_and_python_paths_verified": true,
+    "files_match_built_bundle": true,
+    "payload_file_count": 4,
+    "configured_model_keys_compared": 1,
+    "exact_credential_matches": 0,
+    "credential_encodings_checked": ["UTF-8", "UTF-16LE", "UTF-16BE", "base64"]
+  },
+  "tests": {"local_http_included": true, "passed": 280, "skipped": 0}
+}

@@ -1,0 +1,22 @@
+{
+  "date": "2026-10-30",
+  "main_conversation": {
+    "status": "passed",
+    "provider": "deepseek",
+    "model": "deepseek-flash",
+    "input": "synthetic text only",
+    "document_count": 1,
+    "tool_messages": 1,
+    "reply_completed": true,
+    "seconds": 2.1
+  },
+  "paper_subagent": {
+    "status": "passed",
+    "provider": "deepseek",
+    "model": "deepseek-flash",
+    "input": "synthetic paper text only; no PDF or remote fetch",
+    "characters": 1825,
+    "auto_saved": true,
+    "seconds": 41.7
+  }
+}

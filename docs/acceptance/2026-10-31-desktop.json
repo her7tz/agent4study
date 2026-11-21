@@ -1,0 +1,14 @@
+{
+  "date": "2026-10-31",
+  "isolated_bundle_build": true,
+  "workspace_isolated": true,
+  "initial_startup_exceeded_timeout": true,
+  "reconnect_loaded_console": true,
+  "window_close_kept_backend": true,
+  "window_close_kept_scheduler": true,
+  "reopen_loaded_console": true,
+  "explicit_quit_stopped_owned_backend": true,
+  "external_backend_ownership": "passed: quitting connected desktop leaves independently launched backend running",
+  "scope": "temporary workspace, no model credentials or personal data",
+  "revised_swift_build": true
+}

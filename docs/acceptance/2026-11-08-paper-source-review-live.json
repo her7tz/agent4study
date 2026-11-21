@@ -1,0 +1,196 @@
+{
+  "date": "2026-11-08",
+  "status": "pipeline_passed_predeclared_quality_not_accepted",
+  "scope": "FR-06/FR-08 full unchanged public Transformer PDF through PaperUploads and normal paper_summary capability",
+  "source_kind": "locally_preserved_full_public_pdf",
+  "original_sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+  "input_pages": 15,
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "effective_rule_sha256": "8115fe4e522f5eb29c95946fb6499877202619976c77e1eae051c87fba8109fa",
+  "rules_modified": false,
+  "resumes": "2026-11-07-paper-source-review-live.json",
+  "engine_change": "bounded_original_source_review_after_consolidation",
+  "custom_task_prompt": false,
+  "private_knowledge_or_study_log_used": false,
+  "predeclared_review": [
+    {
+      "id": "table_B_value_dimension",
+      "criterion": "Table 3 B changes d_k to 16 or 32 only; d_v stays inherited base 64. Do not claim d_k=d_v=16/32."
+    },
+    {
+      "id": "appendix_scope",
+      "criterion": "Full 15-page input includes appendix text/captions on pages 13-15. Distinguish unavailable visual interpretation from a false claim that appendix text was not provided."
+    },
+    {
+      "id": "N_only",
+      "criterion": "Table 3 N=2/4/6/8 rows inherit the base configuration except N; preserve PPL/BLEU pairs 6.11/23.7, 5.19/25.3, 4.92/25.8, 4.88/25.5. Lower PPL is better; higher BLEU is better. N=8 improves PPL but lowers BLEU relative to N=6; do not attach a blanket multifactor warning to N-only rows."
+    },
+    {
+      "id": "big",
+      "criterion": "The big row changes model width, feed-forward width, heads, dropout and training steps; do not attribute its result to a single changed variable."
+    },
+    {
+      "id": "experiment_scope",
+      "criterion": "Table 3 numbers are English-to-German newstest2013 development results and per-wordpiece PPL, distinct from newstest2014 test results and per-word perplexity."
+    },
+    {
+      "id": "table_source",
+      "criterion": "The final report links the relevant knowledge unit to original physical PDF page 9 for Table 3."
+    },
+    {
+      "id": "prior_qualifier",
+      "criterion": "The unscaled qualifier belongs to dot-product attention rather than additive attention."
+    },
+    {
+      "id": "prior_position_pages",
+      "criterion": "Positional encoding method comes from physical page 6; learned-position ablation values come from physical page 9; paragraph support preserves both when both are discussed."
+    },
+    {
+      "id": "prior_attention_pages",
+      "criterion": "The three Transformer attention applications retain physical page 5 support for their detailed description, rather than citing physical page 3 alone."
+    },
+    {
+      "id": "prior_prose_and_limits",
+      "criterion": "Do not expose internal material chunk-completion narration; preserve the source conflict of 41.8 versus 41.0 when discussing it; distinguish figures/captions and extracted text from unperformed visual analysis."
+    }
+  ],
+  "pipeline": {
+    "status": "passed",
+    "seconds": 538.3,
+    "pages": 15,
+    "summary_processing": {
+      "version": 1,
+      "source_blocks": 15,
+      "source_characters": 45798,
+      "chunks": 3,
+      "merge_passes": 1,
+      "model_calls": 7,
+      "source_review_batches": 3,
+      "reviewed_units": 18,
+      "all_chunks_processed": true,
+      "checks": "structure_source_ids_and_declared_coverage_only",
+      "rendered_units": 18,
+      "rendering_check": "inline_and_declared_unit_ids"
+    },
+    "subagent": {
+      "role": "paper_reading",
+      "operation": "paper_summary",
+      "run_id": "1005743acd96413aa7a06bb120fc0d60",
+      "verified": true
+    },
+    "zip_preserves_original_markdown_and_evidence": true,
+    "reported_scope": "已读取 PDF 的可提取文字；旋转文字的排版与阅读顺序可能不准确。图像、公式及复杂表格未做视觉识别。"
+  },
+  "quality_review": {
+    "status": "not_accepted",
+    "method": "Compared the final Markdown, saved post-review knowledge units and reader locators against the unchanged 15-page PDF. Used layout text and PDF positions for the Table 3 cells, and visually inspected the Table 2 cost columns on original physical page 8.",
+    "counts": {"passed": 4, "partial": 4, "failed": 2},
+    "checks": [
+      {
+        "id": "table_B_value_dimension",
+        "result": "failed",
+        "units": ["k15"],
+        "report_lines": [71],
+        "source_physical_pages": [9],
+        "evidence": "Both the saved unit and the report say d_k=d_v=16 or 32. The B rows change d_k only. Blank d_v cells inherit 64 from the base row under the table caption.",
+        "stage_observed": "already_in_saved_post_review_unit"
+      },
+      {
+        "id": "appendix_scope",
+        "result": "failed",
+        "units": ["k10", "k17"],
+        "report_lines": [54, 84, 98],
+        "source_physical_pages": [7, 13, 14, 15],
+        "evidence": "Line 54 says the extracted text did not provide the appendix examples. The reader supplied captions for Figures 3–5 and k17 and line 84 describe them. Line 98 repeats the incomplete scope claim. The image content was not visually interpreted by the model, but the caption text was read.",
+        "stage_observed": "already_in_saved_post_review_unit_k10_and_overview"
+      },
+      {
+        "id": "N_only",
+        "result": "partial",
+        "units": ["k15"],
+        "report_lines": [68, 72],
+        "source_physical_pages": [9],
+        "evidence": "The report preserves base N=6 with PPL/BLEU 4.92/25.8 and now gives all three alternative BLEU scores, 23.7, 25.3 and 25.5. It correctly says the N=8 BLEU is lower than base and does not attach a blanket multifactor warning. The matching PPL scores 6.11, 5.19 and 4.88 and the opposing N=8 PPL/BLEU directions are missing. The table caption's general inheritance rule is present, but the report does not explicitly isolate N as the only changed parameter in those rows.",
+        "stage_observed": "omissions_already_in_saved_post_review_unit"
+      },
+      {
+        "id": "big",
+        "result": "passed",
+        "units": ["k15"],
+        "report_lines": [68, 74],
+        "source_physical_pages": [9],
+        "evidence": "The base and big descriptions expose the changed model width, feed-forward width, head count, dropout and training steps. Big PPL/BLEU 4.33/26.4 are retained and no single change is credited with those results."
+      },
+      {
+        "id": "experiment_scope",
+        "result": "partial",
+        "units": ["k14", "k15"],
+        "report_lines": [66, 68, 94],
+        "source_physical_pages": [8, 9],
+        "evidence": "The report correctly distinguishes Table 3 English-to-German newstest2013 dev results and per-wordpiece PPL from Table 2 test BLEU and per-word PPL. It says WMT 2014 but omits the explicit newstest2014 test-set name from the original Table 2 caption, so the complete named experimental scope is not retained.",
+        "stage_observed": "omission_already_in_saved_post_review_units"
+      },
+      {
+        "id": "table_source",
+        "result": "passed",
+        "units": ["k15"],
+        "report_lines": [74, 94],
+        "source_physical_pages": [9],
+        "evidence": "The Table 3 section ends with a k15 citation to PDF page 9, and the closing comparison repeats that citation. The saved k15 source ID resolves to physical page 9, where Table 3 appears."
+      },
+      {
+        "id": "prior_qualifier",
+        "result": "passed",
+        "units": ["k4"],
+        "report_lines": [25],
+        "source_physical_pages": [4],
+        "evidence": "The saved unit and rendered paragraph both say that for large d_k the unscaled dot-product variant performs worse than additive attention. This corrects the reversed qualifier in the previous baseline."
+      },
+      {
+        "id": "prior_position_pages",
+        "result": "partial",
+        "units": ["k8", "k15"],
+        "report_lines": [39, 74],
+        "source_physical_pages": [6, 9],
+        "evidence": "The sinusoidal method and learned-versus-base values are accurate. The paragraph combining them cites k8 and physical page 6 only, though the numeric rows are on page 9. The separate Table 3 paragraph cites page 9, which does not repair the mixed paragraph's evidence link.",
+        "stage_observed": "k8_saved_with_page_6_only_before_rendering"
+      },
+      {
+        "id": "prior_attention_pages",
+        "result": "passed",
+        "units": ["k6"],
+        "report_lines": [33],
+        "source_physical_pages": [4, 5],
+        "evidence": "The paragraph describes encoder–decoder attention, encoder self-attention and masked decoder self-attention. Its k6 citation includes physical page 5, which contains the detailed three-way description."
+      },
+      {
+        "id": "prior_prose_and_limits",
+        "result": "partial",
+        "units": ["k10", "k14", "k17"],
+        "report_lines": [54, 66, 84, 96, 98],
+        "source_physical_pages": [7, 8, 13, 14, 15],
+        "evidence": "The report retains the 41.0 versus 41.8 conflict and the caption section distinguishes written interpretations from unperformed image analysis. No knowledge paragraph narrates a chunk-completion sequence, but line 98 imports the review-batch phrase '本批文字' and line 54 contradicts the actual appendix text coverage.",
+        "stage_observed": "scope_conflict_already_in_saved_post_review_unit_and_overview"
+      }
+    ],
+    "additional_observed_issues": [
+      {
+        "id": "table2_training_cost_column",
+        "units": ["k14"],
+        "report_lines": [66],
+        "source_physical_pages": [8],
+        "finding": "Both k14 and the report assign the two Transformer training costs exclusively to EN-DE and claim that the EN-FR cost cells are empty. The original table centers each of the two Transformer cost values across the cost-column group, between the aligned EN-DE and EN-FR cells used for other models. The table supplies no language-specific column split for these two values, so the report's exclusive assignment is unsupported.",
+        "stage_observed": "already_in_saved_post_review_unit"
+      }
+    ],
+    "conclusion": "The pipeline and citation checks passed. This run repairs the comparison qualifier and restores the two missing BLEU values, but does not pass the ten predeclared semantic checks. The B-row and appendix errors recur, the layer-count perplexities remain absent, and paragraph-level positional evidence regresses. Several issues are already present in the saved post-review units, so rendering alone cannot account for them.",
+    "limitations": [
+      "This is one full-PDF run under the recorded rules and model settings, not an accuracy estimate or a controlled repeatability result.",
+      "Stage localization distinguishes saved post-review units from rendered text. It does not identify which earlier model call first introduced each issue.",
+      "Visual inspection of the original Table 2 was by the reviewer. The application run used the PDF's extracted text."
+    ]
+  },
+  "report": ".local/acceptance/paper-source-review-20261108/paper_summary/paper_summary_20261108-002353_1005743a.md",
+  "report_sha256": "ed6f282779f61652b326a092676d699865d0f135efbe62e817463e85233212eb"
+}

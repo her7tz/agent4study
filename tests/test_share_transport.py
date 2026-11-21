@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from runtime_control import CancellationToken, RunCancelled
+from share_links import read_shared_conversation
 from web_research import PublicFetchError, SHARE_PROXY_HOSTS, fetch_public
 
 
@@ -31,6 +32,30 @@ class ShareTransportTests(unittest.TestCase):
         proxies.assert_not_called()
         addresses.assert_called_once_with("chatgpt.com", 443)
         pinned.assert_called_once_with("chatgpt.com", 443, "1.1.1.1", True, 18)
+        self.assertIn("LocalAgent", direct.request.call_args.kwargs["headers"]["User-Agent"])
+
+    def test_share_reader_requests_public_desktop_document_instead_of_link_preview(self):
+        preview = connection(body=b'<html><title>Shared chat</title><a href="/share/example">View chat</a></html>')
+        document = connection(body=b'<div data-message-author-role="user">Question</div>'
+                                   b'<div data-message-author-role="assistant">Answer</div>')
+
+        def serve():
+            headers = preview.request.call_args.kwargs["headers"]
+            if "Chrome/" in headers["User-Agent"]:
+                return document.getresponse.return_value
+            return preview.getresponse.return_value
+
+        preview.getresponse.side_effect = serve
+        with patch("web_research.urllib.request.getproxies", return_value={}), \
+                patch("web_research._addresses", return_value=["1.1.1.1"]), \
+                patch("web_research._PinnedConnection", return_value=preview):
+            result = read_shared_conversation(URL)
+
+        headers = preview.request.call_args.kwargs["headers"]
+        self.assertNotIn("Cookie", headers)
+        self.assertNotIn("Authorization", headers)
+        self.assertEqual([item["role"] for item in result["messages"]], ["user", "assistant"])
+        self.assertEqual(result["source_url"], URL)
 
     def test_opt_in_uses_connect_and_certificate_verification(self):
         tunneled = connection()

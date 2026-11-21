@@ -1,0 +1,15 @@
+{
+  "date": "2026-10-31",
+  "status": "passed",
+  "server_authorization_confirmed": true,
+  "source": "existing read-only Study Log grant; this week",
+  "complete_read_and_boundary_recheck": true,
+  "computed_statistics_match_server": true,
+  "real_model_report": true,
+  "report_auto_saved": true,
+  "source_index_present": true,
+  "personal_report_retained": false,
+  "credentials_exported": false,
+  "revocation_tested": false,
+  "seconds": 21.8
+}

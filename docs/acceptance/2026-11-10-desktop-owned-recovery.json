@@ -1,0 +1,20 @@
+{
+  "date": "2026-11-10",
+  "requirements": ["FR-01", "FR-02", "FR-14"],
+  "policy": {
+    "swift_assertions_passed": 8,
+    "healthy_owned_process_required": true,
+    "cooldown_seconds": 60,
+    "loopback_status_reports_actual_process_id": true
+  },
+  "desktop_archive": {
+    "sha256": "8c65bac27d5e0339b85fbb8352725bdb936906195ea8b3588336f99f24e9b756",
+    "strict_codesign_after_extraction": true,
+    "payload_files": 4,
+    "payload_matches_built_app": true,
+    "workspace_and_python_paths_verified": true,
+    "new_recovery_code_packaged": true
+  },
+  "scope": "Swift policy checks, real loopback HTTP and extracted app signature. The new GUI was not launched for crash recovery acceptance.",
+  "tests": {"full_suite_passed": 304, "local_http_included": true}
+}

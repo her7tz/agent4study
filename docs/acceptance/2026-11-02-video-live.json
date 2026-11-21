@@ -1,0 +1,25 @@
+{
+  "date": "2026-11-02",
+  "status": "passed",
+  "video_id": "BV1it411g7CX_p1",
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "source": "本地 faster-whisper 转录",
+  "transcript_segments": 184,
+  "sections": 4,
+  "frames": 6,
+  "visual_review": {
+    "requested": true,
+    "candidates": 6,
+    "extracted": 6,
+    "included": 6,
+    "status": "reviewed",
+    "note": "仅对候选关键帧进行了模型分析；只保留取得有效知识说明的画面，未逐帧审阅完整视频。"
+  },
+  "auto_saved": true,
+  "source_evidence_saved": true,
+  "export_image_bytes_match": true,
+  "seconds": 162.7,
+  "report_filename": "BV1it411g7CX_p1_20261102-141940-764-5dc0f7e3.md",
+  "zip_sha256": "807b22778ba41e1356990bbee0763efb5f598ad82db6693ab8b63f97acdf3f74"
+}

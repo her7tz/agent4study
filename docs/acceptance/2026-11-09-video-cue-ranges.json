@@ -1,0 +1,24 @@
+{
+  "date": "2026-11-09",
+  "requirements": ["FR-07"],
+  "bilibili_replay": {
+    "video_id": "BV1it411g7CX_p1",
+    "real_asr_cues": 184,
+    "source_blocks": 6,
+    "within_block_gaps_over_250_ms": 15,
+    "gap_candidate_seconds": 27.59,
+    "covered_candidate_seconds": 16.59,
+    "baseline_candidates_accepted": [27.59, 16.59],
+    "fixed_candidates_accepted": [16.59],
+    "original_archived_frames_within_a_cue": 6,
+    "original_archived_frames_total": 6,
+    "scope": "Previously recorded public Bilibili ASR and synthetic candidate frame proposals. No new model or Bilibili media call."
+  },
+  "youtube_guest_probe": {
+    "url": "https://www.youtube.com/watch?v=aircAruvnKk",
+    "metadata_and_caption_download_succeeded": true,
+    "manual_caption_language": "zh",
+    "parsed_cues": 231
+  },
+  "tests": {"full_suite_passed": 285, "full_suite_skipped": 0, "video_targeted_passed": 24}
+}

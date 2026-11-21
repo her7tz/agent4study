@@ -1,0 +1,23 @@
+{
+  "date": "2026-11-09",
+  "status": "passed",
+  "scope": "FR-09/13 standalone scheduler paper handoff through workbench HTTP endpoints",
+  "standalone_command": "agent.py service run",
+  "standalone_pid": 88373,
+  "workbench_scheduler_owner": "external",
+  "same_run_and_task_on_repeat": true,
+  "material_required_before_model": true,
+  "actual_pdf_pages_parsed": 1,
+  "one_shot_stayed_disabled": true,
+  "reports_published": 1,
+  "fixtures": "synthetic PDF and model result, fixture DNS and notification executable; actual CLI scheduler process, SQLite, loopback HTTP and PDF reader",
+  "browser_ui": {
+    "status": "passed",
+    "isolated_waiting_run": true,
+    "controls_after_click": [
+      "等待论文材料",
+      "登录并获取论文",
+      "上传 PDF 继续原任务"
+    ]
+  }
+}

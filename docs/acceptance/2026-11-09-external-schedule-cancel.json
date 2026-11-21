@@ -1,0 +1,13 @@
+{
+  "date": "2026-11-09",
+  "status": "passed",
+  "scope": "FR-14 HTTP cancellation of a running occurrence owned by another process",
+  "standalone_scheduler_pid": 90078,
+  "workers_observed_running": 2,
+  "seconds_to_media_process_exit": 1.186,
+  "cancelled_worker_reaped_media_child": true,
+  "repeated_request_kept_status": true,
+  "daily_plan_still_enabled": true,
+  "other_worker_status": "completed",
+  "fixture": "actual CLI entry, scheduler, HTTP, SQLite and media subprocess cancellation helper; synthetic workers and no network model or media request"
+}

@@ -1,0 +1,46 @@
+{
+  "date": "2026-11-17",
+  "requirements": [
+    "FR-06",
+    "FR-08",
+    "FR-09",
+    "FR-12"
+  ],
+  "publication_url": "https://ieeexplore.ieee.org/document/11029963",
+  "verified_doi": "10.1109/ICSE55347.2025.00035",
+  "input_pdf_url": "https://people.cs.umass.edu/~brun/class/2024Fall/CS692P/idllm.pdf",
+  "publisher_version_verified": false,
+  "source_sha256": "9260c09a8ce72a54c0cc0aad02bbefd1938ccd8e95149ff110cb3ff6f43981e1",
+  "physical_pdf_pages": 12,
+  "extracted_characters": 88579,
+  "source_blocks": 12,
+  "knowledge_units": 15,
+  "same_task_after_import": true,
+  "task_attempt": 2,
+  "task_status": "completed",
+  "model": "deepseek-flash",
+  "elapsed_seconds": 686.0,
+  "all_report_citations_match_extracted_page_ids": true,
+  "saved_pdf_and_zip_match_input_bytes": true,
+  "manual_evaluation_conflict": {
+    "unit": "k10",
+    "cited_physical_pages": [
+      1,
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "abstract_page_1": {
+      "just_in_time": 65.0,
+      "post_hoc": 55.9
+    },
+    "body_page_8_and_figure_3_page_9": {
+      "post_hoc": 65.0,
+      "just_in_time": 55.9
+    },
+    "report_preserves_disagreement": true
+  },
+  "scope": "Public UMass course copy, matched by title and authors. Original IEEE task resumed through local PDF import. Real model, no IEEE or institutional login. Numerical disagreement was manually spot-checked, not a line-by-line factual audit."
+}

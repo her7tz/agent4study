@@ -7,11 +7,18 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 APP_NAME = "Agent 工作台.app"
+
+
+def clear_signing_attributes(bundle):
+    for attribute in ("com.apple.FinderInfo", "com.apple.ResourceFork"):
+        subprocess.run(["/usr/bin/xattr", "-dr", attribute, str(bundle)],
+                       check=False, capture_output=True)
 
 
 def main():
@@ -23,7 +30,9 @@ def main():
     source = ROOT / "desktop/AgentDesktop.swift"
     build = ROOT / ".local/desktop-build"
     build.mkdir(parents=True, exist_ok=True)
-    bundle = build / (uuid.uuid4().hex + ".app")
+    candidate = build / uuid.uuid4().hex
+    bundle = candidate / APP_NAME
+    archive = bundle.with_suffix(".zip")
     executable = bundle / "Contents/MacOS/AgentDesktop"
     resources = bundle / "Contents/Resources"
     executable.parent.mkdir(parents=True)
@@ -34,7 +43,9 @@ def main():
     print("正在构建桌面客户端…", flush=True)
     subprocess.run([compiler, "-swift-version", "5", "-parse-as-library", "-sdk", sdk,
                     "-target", architecture + "-apple-macos13.0", "-module-cache-path", str(build / "module-cache"),
-                    "-framework", "Cocoa", "-framework", "WebKit", "-framework", "Security", str(source), str(ROOT / "desktop/AccountBrowser.swift"), "-o", str(executable)], check=True)
+                    "-framework", "Cocoa", "-framework", "WebKit", "-framework", "Security", str(source),
+                    str(ROOT / "desktop/AccountBrowser.swift"), str(ROOT / "desktop/BackendRecovery.swift"),
+                    "-o", str(executable)], check=True)
     iconset = build / "Agent.iconset"
     subprocess.run([str(executable), "--write-icon", str(iconset)], check=True)
     # Modern ICNS entries contain the PNG representations produced above.
@@ -62,23 +73,38 @@ def main():
     }
     with (bundle / "Contents/Info.plist").open("wb") as output:
         plistlib.dump(info, output)
-    for attribute in ("com.apple.FinderInfo", "com.apple.ResourceFork"):
-        subprocess.run(["/usr/bin/xattr", "-dr", attribute, str(bundle)], check=False, capture_output=True)
+    clear_signing_attributes(bundle)
     subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(bundle)], check=True)
+    subprocess.run(["/usr/bin/ditto", "-c", "-k", "--keepParent", "--norsrc", "--noextattr",
+                    str(bundle), str(archive)], check=True)
+    # A sync provider may add Finder metadata to the unpacked bundle. Verify the
+    # artifact users can extract on a regular filesystem before publishing it.
+    with tempfile.TemporaryDirectory(prefix="agent-desktop-verify-") as extracted:
+        subprocess.run(["/usr/bin/ditto", "-x", "-k", str(archive), extracted], check=True)
+        subprocess.run(["codesign", "--verify", "--deep", "--strict",
+                        str(Path(extracted) / APP_NAME)], check=True)
     destination = ROOT / "dist" / APP_NAME
     destination.parent.mkdir(exist_ok=True)
     previous = build / ("previous-" + uuid.uuid4().hex + ".app")
     if destination.exists():
         destination.rename(previous)
+    moved = False
     try:
         bundle.rename(destination)
-    except Exception:
+        moved = True
+        clear_signing_attributes(destination)
+        archive.replace(destination.with_suffix(".zip"))
+    except (OSError, subprocess.CalledProcessError):
+        if moved:
+            destination.rename(bundle)
         if previous.exists():
             previous.rename(destination)
         raise
     if previous.exists():
         shutil.rmtree(previous)
+    candidate.rmdir()
     print("桌面客户端已生成：" + str(destination), flush=True)
+    print("已验签的桌面压缩包：" + str(destination.with_suffix(".zip")), flush=True)
     return 0
 
 

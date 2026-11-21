@@ -1,0 +1,16 @@
+{
+  "date": "2026-11-10",
+  "requirements": ["FR-05", "FR-13"],
+  "baseline": "The second independent-service run still used startup defaults after a workbench save.",
+  "isolated_processes": {
+    "same_service_process": true,
+    "separate_workbench_process": true,
+    "workbench_recognized_external_scheduler": true,
+    "active_run_kept_start_snapshot": true,
+    "later_run_loaded_new_defaults": true,
+    "completed_runs": 2,
+    "saved_reports": 2,
+    "scope": "Real independent service and settings writer, synthetic credentials and business results, accelerated scheduling poll."
+  },
+  "tests": {"full_suite_passed": 288, "scheduler_targeted_passed": 33, "python_3_9_syntax": true}
+}

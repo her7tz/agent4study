@@ -1,6 +1,7 @@
 """Business-specific inputs, tools, and completion checks over SharedHarness."""
 
 from pathlib import Path
+from urllib.parse import quote, unquote
 
 from harness import load_skill_instructions
 from harness_runtime import SharedHarness
@@ -79,13 +80,16 @@ class VideoHarness(BusinessHarness):
         import re
         path = Path(result["path"])
         for image in re.findall(r"!\[[^\n]*?\]\(([^\s)]+)\)", self.result["markdown"]):
-            target = (path.parent / image).resolve()
+            target = (path.parent / unquote(image)).resolve()
             try:
                 target.relative_to(path.parent.resolve())
             except ValueError as exc:
                 raise RuntimeError("视频原图路径超出成果目录。") from exc
             if not target.is_file():
                 raise RuntimeError("视频笔记引用的原图缺失。")
+        evidence = path.with_name(path.stem + "_assets") / "source-evidence.json"
+        if not evidence.is_file() or evidence.is_symlink():
+            raise RuntimeError("视频笔记的字幕或转录依据文件缺失。")
         return result
 
 
@@ -105,22 +109,52 @@ class PaperHarness(BusinessHarness):
 
     def execute(self):
         from dataclasses import replace
+        import json
+        from storage_layout import atomic_text
         from paper_summary import summarize_paper
         context = replace(self.context, client=self.shared.model, progress=self.shared.progress,
                           cancellation=self.shared.cancellation)
         result = summarize_paper(self.parameters, context)
         source=result.pop("_pdf_path",None)
+        evidence = result.pop("_source_evidence", None)
         result.update(self.shared.save_markdown(result["title"], result["markdown"], self.role))
+        path = Path(result["path"])
+        assets = path.with_name(path.stem + "_assets")
+        if evidence is not None:
+            self.shared.cancellation.check()
+            assets.mkdir(mode=0o700, exist_ok=True)
+            atomic_text(assets / "source-evidence.json", json.dumps(evidence, ensure_ascii=False, indent=2) + "\n")
+            result["evidence_file"] = assets.name + "/source-evidence.json"
+            result["markdown"] += "\n\n[知识条目与原文依据（JSON 文件）](" + quote(result["evidence_file"]) + ")\n"
         if source:
             import shutil
-            from storage_layout import atomic_text
-            path=Path(result["path"])
             assets=path.with_name(path.stem+"_assets");assets.mkdir(mode=0o700,exist_ok=True)
             self.shared.cancellation.check()
             shutil.copyfile(source,assets/"original.pdf")
             (assets/"original.pdf").chmod(0o600)
-            result["markdown"] += "\n\n[查看原始 PDF]("+assets.name+"/original.pdf)\n"
+            result["markdown"] += "\n\n[查看原始 PDF]("+quote(assets.name+"/original.pdf")+")\n"
+        if source or evidence is not None:
             atomic_text(path,result["markdown"])
+
+        if self.parameters.get("include_presentation"):
+            from paper_presentation_rendering import create_presentation, PresentationError
+            from runtime_control import RunCancelled
+            try:
+                presentation = create_presentation(self.parameters, evidence, source, assets,
+                    self.context.settings, self.shared.model, self.shared.cancellation, self.shared.progress)
+            except RunCancelled:
+                raise
+            except Exception as exc:
+                raise PresentationError("论文总结已保存，PPT 生成未完成：" + str(exc)) from exc
+            result["presentation"] = presentation
+            result["presentation_file"] = assets.name + "/presentation.pptx"
+            result["markdown"] += "\n\n[下载组会汇报 PPT](" + quote(result["presentation_file"]) + ")\n"
+            result["markdown"] += "\n[幻灯片内容与来源](" + quote(assets.name + "/presentation-plan.json") + ")\n"
+            for figure in presentation["figure_review"]:
+                if figure.get("image"):
+                    result["markdown"] += "\n![PPT 原图，PDF 第 {} 页]({})\n".format(
+                        figure["page"], quote(assets.name + "/" + figure["image"]))
+            atomic_text(path, result["markdown"])
 
         return result
 
@@ -130,6 +164,17 @@ class PaperHarness(BusinessHarness):
             raise RuntimeError("论文总结缺少实际读取的材料。")
         if self.result.get("source_scope") not in self.result["markdown"]:
             raise RuntimeError("论文总结没有说明实际阅读范围。")
+        if self.result.get("evidence_file"):
+            path = Path(result["path"])
+            evidence = path.with_name(path.stem + "_assets") / "source-evidence.json"
+            if not evidence.is_file() or evidence.is_symlink():
+                raise RuntimeError("论文总结的原文依据文件缺失。")
+        if self.parameters.get("include_presentation"):
+            from paper_presentation_rendering import verify_presentation
+            path = Path(result["path"])
+            slides = verify_presentation(path.with_name(path.stem + "_assets") / "presentation.pptx")
+            if slides != self.result.get("presentation", {}).get("slides"):
+                raise RuntimeError("PPT 页数与生成结果不一致。")
         return result
 
 

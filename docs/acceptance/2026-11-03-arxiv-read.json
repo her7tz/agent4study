@@ -1,0 +1,12 @@
+{
+  "input_url": "https://arxiv.org/abs/1706.03762",
+  "resolved_url": "https://arxiv.org/pdf/1706.03762",
+  "kind": "pdf",
+  "pages": 15,
+  "pages_with_text": 15,
+  "characters": 45826,
+  "scope": "已读取 PDF 的可提取文字；旋转文字的排版与阅读顺序可能不准确。图像、公式及复杂表格未做视觉识别。",
+  "original_pdf_sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+  "model_called": false,
+  "before_rotation_fix_characters": 44948
+}

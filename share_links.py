@@ -21,6 +21,9 @@ MAX_TEXT = 300000
 MAX_MESSAGES = 2000
 _SHARE_PATH = re.compile(r"^/share/([A-Za-z0-9][A-Za-z0-9_-]{7,127})/?$")
 _HOSTS = {"chatgpt.com", "chat.openai.com"}
+# Share pages can serve an Open Graph preview to non-browser clients.
+_DOCUMENT_USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
 
 class ShareLinkError(ValueError):
@@ -58,7 +61,8 @@ def _source_urls(messages, source_url):
 
 
 class _ShareHTML(HTMLParser):
-    OMIT = {"script", "style", "noscript", "svg", "nav", "footer", "header", "button", "form"}
+    MEDIA = {"audio", "video", "iframe", "object", "embed"}
+    OMIT = {"script", "style", "noscript", "svg", "nav", "footer", "header", "button", "form"} | MEDIA
     VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
     BLOCK = {"p", "div", "article", "section", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "ul", "ol", "li", "tr", "pre"}
 
@@ -66,7 +70,7 @@ class _ShareHTML(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.stack, self.scripts, self.title, self.messages = [], [], [], []
         self.active, self.script = None, None
-        self.has_images = False
+        self.has_attachments = self.unclosed_message = False
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
@@ -78,8 +82,14 @@ class _ShareHTML(HTMLParser):
         role = attrs.get("data-message-author-role")
         if role in {"user", "assistant"} and self.active is None:
             self.active = {"role": role, "parts": [], "depth": depth, "has_text": False,
-                "source_message_id": attrs.get("data-message-id", "")[:200]}
-        if self.active and not any(item in self.OMIT for item in self.stack):
+                "has_attachment": False, "source_message_id": (attrs.get("data-message-id") or "")[:200]}
+        if self.active and not any(item in self.OMIT for item in self.stack[:depth]):
+            if tag == "img" or tag in self.MEDIA:
+                self.has_attachments = True
+                self.active["has_attachment"] = True
+                self.active["parts"].append("\n[此消息含非文字内容或附件，未读取其内容]\n")
+            if tag in self.OMIT:
+                return
             if tag in self.BLOCK or tag in {"br", "hr"}:
                 self.active["parts"].append("\n\n" if tag != "br" else "\n")
             if tag == "li":
@@ -93,9 +103,6 @@ class _ShareHTML(HTMLParser):
                     self.active["parts"].append(" [" + public_url(attrs.get("href", "")) + "] ")
                 except ValueError:
                     pass
-            if tag == "img":
-                self.has_images = True
-                self.active["parts"].append("\n[分享中有图像，未读取图像内容]\n")
 
     def handle_endtag(self, tag):
         if tag == "script" and self.script is not None:
@@ -107,8 +114,12 @@ class _ShareHTML(HTMLParser):
             index = len(self.stack) - 1 - self.stack[::-1].index(tag)
             self.stack = self.stack[:index]
         if self.active and len(self.stack) <= self.active["depth"]:
+            if len(self.stack) < self.active["depth"]:
+                self.unclosed_message = True
+                self.active = None
+                return
             content = re.sub(r"\n{3,}", "\n\n", "".join(self.active["parts"])).strip()
-            if content:
+            if content and (self.active["has_text"] or self.active["has_attachment"]):
                 self.messages.append({"role": self.active["role"], "content": content,
                     "source_message_id": self.active["source_message_id"], "_has_text": self.active["has_text"]})
             self.active = None
@@ -191,11 +202,12 @@ def _json_payloads(page):
             if not isinstance(argument, str):
                 continue
             stream_chunks.append(argument)
-    # A JSON line can span enqueue calls. Turbo-stream appends each P/E array
-    # to ONE global reference table; integer payloads reuse an existing index.
+    # Only LF separates records. Unicode line separators can occur inside JSON
+    # strings, and a record can span enqueue calls. Turbo-stream appends each
+    # P/E array to one global reference table; integers reuse an existing index.
     # Decode after collecting the table, preserving append offsets and Z refs.
     pool, root_indices, deferred_roots = [], [], {}
-    for line in "".join(stream_chunks).splitlines():
+    for line in "".join(stream_chunks).split("\n"):
         line = line.strip()
         if not line:
             continue
@@ -273,7 +285,7 @@ def _message_text(message):
     if parts is None and isinstance(content, dict) and isinstance(content.get("text"), str):
         parts = [content["text"]]
     if not isinstance(parts, list):
-        return None, bool(content)
+        parts = [content] if content else []
     text, attachments = [], False
     for part in parts:
         if isinstance(part, str):
@@ -304,7 +316,7 @@ def _conversation_messages(value):
             for item in raw:
                 if isinstance(mapping, dict):
                     node_id = item.get("id") if isinstance(item, dict) else item if isinstance(item, str) else None
-                    if node_id in mapping:
+                    if isinstance(node_id, str) and node_id in mapping:
                         item = mapping[node_id]
                     elif isinstance(item, str) or (isinstance(item, dict) and "message" not in item and "content" not in item):
                         raise ShareLinkError("分享的消息顺序引用不完整，未省略缺失消息。")
@@ -315,16 +327,19 @@ def _conversation_messages(value):
         if len(mapping) > MAX_MESSAGES * 4:
             raise ShareLinkError("分享中的消息数量过多，请缩小分享范围。")
         current = value.get("current_node")
-        if current is not None and current not in mapping:
+        if current is not None and (not isinstance(current, str) or current not in mapping):
             raise ShareLinkError("分享的当前对话分支不存在，未尝试拼接其他分支。")
-        if current not in mapping:
+        if current is None:
             leaves = [key for key, node in mapping.items() if isinstance(node, dict) and not node.get("children")]
             if len(leaves) != 1:
+                if any(isinstance(node, dict) and isinstance(node.get("message"), dict)
+                       and "content" in node["message"] for node in mapping.values()):
+                    raise ShareLinkError("分享未指定唯一的对话分支，未使用页面片段或拼接其他分支。")
                 return None
             current = leaves[0]
         chain, seen = [], set()
         while current is not None:
-            if current in seen or current not in mapping:
+            if not isinstance(current, str) or current in seen or current not in mapping:
                 raise ShareLinkError("分享的消息关系不完整，未尝试拼接不同对话分支。")
             seen.add(current)
             node = mapping[current]
@@ -383,7 +398,7 @@ def read_shared_conversation(url, cancellation=None):
     try:
         final_url, html, mime = fetch_public(source_url, cancellation=token, timeout=25,
             max_bytes=MAX_SHARE_BYTES, redirect_validator=redirect_validator,
-            proxy_hosts=_HOSTS)
+            proxy_hosts=_HOSTS, user_agent=_DOCUMENT_USER_AGENT)
     except PublicFetchError as exc:
         raise ShareLinkError("未取得分享正文（HTTP {}）。分享可能已删除、需要登录或限制自动读取；可以改为粘贴分享的文字。".format(exc.http_status)) from exc
     except (TimeoutError, socket.timeout) as exc:
@@ -422,21 +437,30 @@ def read_shared_conversation(url, cancellation=None):
         if len(unique) != 1:
             raise ShareLinkError("分享页面存在多组不一致的聊天正文，无法确认分享范围；未选择较长内容或合并其他分支。")
         messages, title, has_attachments, method = next(iter(unique.values()))
+    elif page.active is not None or page.unclosed_message:
+        raise ShareLinkError("分享页面包含未完成的聊天消息，未使用部分消息生成知识。")
     elif page.messages:
-        messages, title, has_attachments, method = page.messages, "", page.has_images, "author_html"
+        messages, title, has_attachments, method = page.messages, "", page.has_attachments, "author_html"
     else:
         raise ShareLinkError("未取得可识别的分享聊天正文。页面可能需要登录、验证，或分享已失效；不会用网页导航和脚本代替聊天内容。可改为粘贴聊天文字。")
     if len(messages) > MAX_MESSAGES or sum(len(message["content"]) for message in messages) > MAX_TEXT:
         raise ShareLinkError("分享内容超过 2000 条消息或 30 万字上限，请缩小分享范围后重试；尚未写入知识库。")
     if not any(message["role"] == "assistant" and message["_has_text"] for message in messages):
         raise ShareLinkError("分享中没有可读取的模型文字回复，请检查分享范围。")
-    messages = [{"id": index, **{key: value for key, value in message.items() if key != "_has_text"}}
-        for index, message in enumerate(messages, 1)]
+    media_only = 0
+    for index, message in enumerate(messages, 1):
+        message["id"] = index
+        if not message.pop("_has_text"):
+            message["has_readable_text"] = False
+            media_only += 1
     title = (title or "".join(page.title)).strip()
     title = re.sub(r"^(?:ChatGPT\s*[-–—·]\s*)|(?:\s*[-–—·]\s*ChatGPT)$", "", title).strip()[:200] or "ChatGPT 分享知识整理"
     limitations = ["只整理该链接公开分享范围内可读取的用户与模型文字，不代表完整原始聊天；未独立核验模型说法。", "图像、音频及附件未下载或识别。"]
+    if media_only:
+        limitations.append("有 {} 条消息仅含未读取的媒体或附件，保留原消息顺序，未用作知识依据。".format(media_only))
     token.check()
     return {"title": title, "messages": messages, "source_type": "chatgpt_share", "source_url": source_url,
         "source_title": title, "source_urls": _source_urls(messages, source_url),
         "source_details": {"reader": method, "message_count": len(messages), "has_attachments": has_attachments,
+            "media_only_message_count": media_only,
             "limitations": limitations, "retrieved_at": time.time()}}

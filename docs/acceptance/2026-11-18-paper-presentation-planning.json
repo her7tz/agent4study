@@ -1,0 +1,27 @@
+{
+  "date": "2026-11-18",
+  "scope": "PPT planning only; no PPTX export or product UI integration yet",
+  "minutes": 15,
+  "slides": 20,
+  "topics": [
+    "background",
+    "case_study",
+    "closing",
+    "conclusion",
+    "contributions",
+    "discussion",
+    "existing_limitations",
+    "experimental_setup",
+    "further_analysis",
+    "main_results",
+    "method",
+    "motivation",
+    "overview",
+    "problem",
+    "research_questions",
+    "title"
+  ],
+  "source_links_checked": true,
+  "figure_candidates": 3,
+  "tests_passed": 15
+}

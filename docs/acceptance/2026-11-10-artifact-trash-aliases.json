@@ -1,0 +1,16 @@
+{
+  "date": "2026-11-10",
+  "requirements": ["FR-12", "FR-17", "NFR-08"],
+  "baseline_failures": ["Duplicate move for a legacy and current ID", "Duplicate move for uppercase Markdown on a case-insensitive filesystem", "Invalid restore ID raised a TypeError"],
+  "checks": {
+    "one_trash_entry_for_both_identifiers": true,
+    "original_extension_case_preserved": true,
+    "overlap_rejected_before_file_moves": true,
+    "nested_document_task_link_hidden_and_restored": true,
+    "manual_and_scheduled_output_links_restored": true,
+    "loopback_invalid_restore_returns_400": true,
+    "loopback_legacy_report_and_asset_links_readable_after_restore": true
+  },
+  "scope": "Real migration and local HTTP routes with a disposable library, SQLite and synthetic documents.",
+  "tests": {"full_suite_passed": 297, "content_and_migration_targeted_passed": 22, "python_3_9_syntax": true}
+}

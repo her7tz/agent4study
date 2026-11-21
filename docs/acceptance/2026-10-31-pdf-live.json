@@ -1,0 +1,15 @@
+{
+  "date": "2026-10-31",
+  "status": "passed",
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "input": "synthetic two-page PDF, second page blank; no personal data",
+  "http_upload": true,
+  "upload_did_not_start_task": true,
+  "http_task_completed": true,
+  "original_pdf_preserved": true,
+  "export_contains_original_pdf": true,
+  "blank_page_scope_reported": true,
+  "markdown_characters": 1127,
+  "seconds": 29.4
+}

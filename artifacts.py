@@ -58,13 +58,15 @@ class ArtifactStore:
                 "category": path.relative_to(self.root).parts[0] if len(path.relative_to(self.root).parts) > 1 else "legacy",
                 "folder": FOLDERS.get(path.relative_to(self.root).parts[0], path.relative_to(self.root).parts[0] if len(path.relative_to(self.root).parts) > 1 else "早期文档") }
 
-    def save(self, title, markdown):
+    def save(self, title, markdown, category="notes"):
         if not isinstance(title, str) or not title.strip() or len(title) > 200:
             raise ArtifactError(400, "笔记标题必须为 1 到 200 字。")
         if not isinstance(markdown, str) or not markdown.strip() or len(markdown) > 80000:
             raise ArtifactError(400, "笔记正文必须为 1 到 80000 字。")
+        if not isinstance(category, str) or category not in FOLDERS:
+            raise ArtifactError(400, "没有登记该文档分类。")
         with self._lock:
-            directory = feature_directory(self.root, "notes")
+            directory = feature_directory(self.root, category)
             path = directory / ("note_" + time.strftime("%Y%m%d-%H%M%S") + "_" + uuid.uuid4().hex[:8] + ".md")
             pending = None
             try:
@@ -152,39 +154,65 @@ class ArtifactStore:
         db.row_factory = sqlite3.Row
         return db
 
+    @staticmethod
+    def _reserve_path(path: Path, reserved: List[Path], message: str) -> None:
+        if any(path == other or path in other.parents or other in path.parents for other in reserved):
+            raise ArtifactError(409, message)
+        reserved.append(path)
+
     def delete(self, artifact_ids: List[str]) -> Dict[str, Any]:
         if not isinstance(artifact_ids, list) or not artifact_ids or len(artifact_ids) > 50 or not all(isinstance(i, str) for i in artifact_ids):
             raise ArtifactError(400, "请指定要删除的内容，单次最多 50 份。")
         with self._lock:
-            notes = [self._find(i) for i in dict.fromkeys(artifact_ids)]
+            notes = {}
+            for artifact_id in dict.fromkeys(artifact_ids):
+                note = self._find(artifact_id)
+                notes.setdefault(note["name"], note)
             plans = []
-            for note in notes:
+            reserved_paths = []
+            suffixes = (".md", ".txt", ".html", ".zip")
+            for note in notes.values():
                 source = self._safe_path(note["name"])
                 paths = [source]
-                for suffix in (".md", ".txt", ".html", ".zip"):
-                    sibling = source.with_suffix(suffix)
-                    if sibling != source and sibling.exists():
-                        self._safe_path(sibling.relative_to(self.root).as_posix())
-                        if not sibling.is_file():
-                            raise ArtifactError(400, "导出副本不是普通文件。")
-                        paths.append(sibling)
+                siblings = set(source.parent.iterdir())
+                for sibling in sorted(siblings):
+                    if (sibling == source or sibling.suffix.lower() not in suffixes
+                            or sibling.stem.casefold() != source.stem.casefold()):
+                        continue
+                    # Use actual names so case aliases cannot schedule the same file twice.
+                    matching_name = sibling.with_name(source.stem + sibling.suffix)
+                    if (matching_name != sibling
+                            and (matching_name in siblings or not matching_name.exists()
+                                 or not sibling.exists() or not matching_name.samefile(sibling))):
+                        continue
+                    self._safe_path(sibling.relative_to(self.root).as_posix())
+                    if not sibling.is_file():
+                        raise ArtifactError(400, "导出副本不是普通文件。")
+                    paths.append(sibling)
+                linked_files = list(paths)
                 assets = source.with_name(source.stem + "_assets")
                 if assets.exists():
                     self._safe_path(assets.relative_to(self.root).as_posix())
                     for child in assets.rglob("*"):
                         self._safe_path(child.relative_to(self.root).as_posix())
+                        if child.suffix.lower() in suffixes and child.is_file():
+                            linked_files.append(child)
+                    if assets.is_file():
+                        linked_files.append(assets)
                     paths.append(assets)
-                plans.append((note, paths, self.trash / uuid.uuid4().hex))
+                for path in paths:
+                    self._reserve_path(path, reserved_paths, "所选内容的文件或资源目录重叠，请选择所属文档后重试。")
+                names = [path.relative_to(self.root).as_posix() for path in linked_files]
+                plans.append((note, paths, names, self.trash / uuid.uuid4().hex))
             moved = []
             created = []
             try:
                 with self._connect() as db:
                     db.execute("BEGIN IMMEDIATE")
                     tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-                    for note, paths, directory in plans:
+                    for note, paths, names, directory in plans:
                         directory.mkdir(parents=True, mode=0o700)
                         created.append(directory)
-                        names = [p.relative_to(self.root).as_posix() for p in paths if p.is_file()]
                         task_rows, run_rows = [], []
                         for name in names:
                             if "ui_tasks" in tables:
@@ -204,7 +232,7 @@ class ArtifactStore:
                         manifest_path = directory / "manifest.json"
                         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
                         manifest_path.chmod(0o600)
-                return {"deleted": [{"id": note["id"], "title": note["title"], "trash_id": directory.name} for note, _, directory in plans],
+                return {"deleted": [{"id": note["id"], "title": note["title"], "trash_id": directory.name} for note, _, _, directory in plans],
                         "message": "内容已移入本地回收站，可以恢复。"}
             except Exception:
                 for original, target in reversed(moved):
@@ -217,11 +245,13 @@ class ArtifactStore:
     def restore(self, trash_ids: List[str]) -> Dict[str, Any]:
         if not isinstance(trash_ids, list) or not trash_ids or len(trash_ids) > 50:
             raise ArtifactError(400, "请指定要恢复的回收站内容。")
+        if any(not isinstance(trash_id, str) or len(trash_id) != 32 or any(c not in "0123456789abcdef" for c in trash_id)
+               for trash_id in trash_ids):
+            raise ArtifactError(400, "回收站内容编号无效。")
         with self._lock:
             manifests = []
+            reserved_targets = []
             for trash_id in dict.fromkeys(trash_ids):
-                if not isinstance(trash_id, str) or len(trash_id) != 32 or any(c not in "0123456789abcdef" for c in trash_id):
-                    raise ArtifactError(400, "回收站内容编号无效。")
                 directory = self.trash / trash_id
                 if directory.is_symlink() or (directory / "manifest.json").is_symlink():
                     raise ArtifactError(403, "回收站目录无效。")
@@ -231,6 +261,10 @@ class ArtifactStore:
                     raise ArtifactError(404, "找不到这份回收站内容。") from exc
                 for relative in manifest["paths"]:
                     target = self._safe_path(relative)
+                    # Different trash entries may be successive versions of the
+                    # same filename. Check the entire restore plan before moving
+                    # anything; checking only existing files misses this case.
+                    self._reserve_path(target, reserved_targets, "所选回收站内容包含同名或重叠路径，请分别选择要恢复的版本。")
                     source = directory / "files" / relative
                     try:
                         source.resolve().relative_to(directory.resolve())

@@ -1,0 +1,80 @@
+{
+  "date": "2026-11-06",
+  "status": "passed",
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "seconds": 10.4,
+  "input": "Public TaskGroup question; no personal material",
+  "searches": [
+    {
+      "query": "asyncio TaskGroup Python documentation",
+      "results": [
+        {
+          "title": "Python asyncio 模块 - 菜鸟教程",
+          "url": "https://www.runoob.com/python3/python-asyncio.html",
+          "snippet": "Python asyncio 模块 asyncio 是 Python 标准库中的一个模块，用于编写异步 I/O 操作的代码。 asyncio 提供了一种高效的方式来处理并发任务，特别适用于 I/O 密集型操作，如网络请求、文件读写等。",
+          "kind": "search_result",
+          "provider": "Bing"
+        },
+        {
+          "title": "使用asyncio - Python教程 - 廖雪峰的官方网站",
+          "url": "https://liaoxuefeng.com/books/python/async-io/asyncio/",
+          "snippet": "使用asyncio 廖雪峰 资深软件开发工程师，业余马拉松选手。 asyncio 是Python 3.4版本引入的标准库，直接内置了对异步IO的支持。 asyncio 的编程模型就是一个消息循环。 asyncio 模块内部实现了 EventLoop，把需要执行的协程扔到 EventLoop 中执行，就实现了异步IO。",
+          "kind": "search_result",
+          "provider": "Bing"
+        },
+        {
+          "title": "asyncio — Asynchronous I/O — Python 3.15.2 documentation",
+          "url": "https://docs.python.org/3/library/asyncio.html",
+          "snippet": "asyncio is a library to write concurrent code using the async/await syntax. asyncio is used as a foundation for multiple Python asynchronous frameworks that provide high-performance network and web-servers, database connection libraries, distributed task queues, etc.",
+          "kind": "search_result",
+          "provider": "Bing"
+        },
+        {
+          "title": "理解Python协程：async、await、asyncio - 知乎",
+          "url": "https://zhuanlan.zhihu.com/p/1917174784527171734",
+          "snippet": "如果你的代码里有大量的 async、await、asyncio，但对这些概念一头雾水，那这篇文章就是为你而写的。 我们将从最基础的概念开始，用具体的例子和代码，彻底搞懂异步编程、协程、事件循环等核心概念。 从生活例子理解…",
+          "kind": "search_result",
+          "provider": "Bing"
+        },
+        {
+          "title": "Python asyncio 异步编程完全指南：从协程原理到高并发实战",
+          "url": "https://blog.csdn.net/2301_76889955/article/details/159087498",
+          "snippet": "文章浏览阅读840次，点赞14次，收藏12次。 本文系统讲解Python asyncio异步编程核心机制，涵盖协程定义与await语义、事件循环调度原理、gather与create_task并发模式对比、异常处理与timeout控制，并结合aiohttp实现高并发异步爬虫实战。",
+          "kind": "search_result",
+          "provider": "Bing"
+        },
+        {
+          "title": "Python中协程异步IO（asyncio）详解 - 知乎",
+          "url": "https://zhuanlan.zhihu.com/p/59621713",
+          "snippet": "asyncio.Task用于实现协作式多任务的库，且Task对象不能用户手动实例化，通过下面2个函数创建： asyncio.async () loop.create_task () 或 asyncio.ensure_future () 最简单的异步IO示例 run_until_complete (): 阻塞调用，直到协程运行结束才返回。",
+          "kind": "search_result",
+          "provider": "Bing"
+        }
+      ],
+      "error": null
+    }
+  ],
+  "reads": [
+    {
+      "requested_url": "https://docs.python.org/3/library/asyncio.html",
+      "url": "https://docs.python.org/3/library/asyncio.html",
+      "discovered_from": "search",
+      "title": "asyncio — Asynchronous I/O — Python 3.15.2 documentation",
+      "read_chars": 3662,
+      "available_chars": 3662,
+      "links_returned": 25
+    },
+    {
+      "requested_url": "https://docs.python.org/3/library/asyncio-task.html",
+      "url": "https://docs.python.org/3/library/asyncio-task.html",
+      "discovered_from": "https://docs.python.org/3/library/asyncio.html",
+      "title": "Coroutines and tasks — Python 3.15.2 documentation",
+      "read_chars": 24000,
+      "available_chars": 44097,
+      "links_returned": 19
+    }
+  ],
+  "reply": "已按流程执行：Bing 搜索结果中出现了 Python 官方 asyncio 索引页（`docs.python.org/3/library/asyncio.html`，3.15.2 文档），该页 links 中指向 “run Python coroutines” 的链接即 `asyncio-task.html`（《Coroutines and tasks》），正文由该页实际读取。\n\n**TaskGroup 任务失败行为（据官方文档）**\n\n任一子任务以非 `CancelledError` 的异常失败时，组内其余任务即被取消，且不能再新增任务；若 `async with` 体仍在执行，包含它的任务也会被取消，由此产生的 `CancelledError` 只中断 await，不会从 `async with` 向外传播。全部任务结束后，各非取消异常合并为 `ExceptionGroup`/`BaseExceptionGroup` 抛出。`CancelledError` 本身不算失败、不参与合并。`KeyboardInterrupt`/`SystemExit` 特殊：仍取消并等待其余任务，但随后直接重新抛出原异常，而非异常组。\n\n来源：[Coroutines and tasks — Python 3.15.2 documentation](https://docs.python.org/3/library/asyncio-task.html)（经 [asyncio — Asynchronous I/O](https://docs.python.org/3/library/asyncio.html) 页面链接进入，访问于 2026-11-06）\n\n联网读取范围：1 页只读取了节选。",
+  "checks": "Each read URL was previously returned by search or a read page link; official target reached from page navigation."
+}

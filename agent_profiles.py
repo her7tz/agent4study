@@ -1,10 +1,10 @@
 """Private per-agent overrides and immutable execution snapshots."""
 import copy
+import hashlib
 import json
-import re
 import threading
 from pathlib import Path
-from harness import SKILLS_DIR, DeepSeekClient
+from harness import MODEL_ID_PATTERN, SKILLS_DIR, DeepSeekClient, secret_pattern
 from storage_layout import atomic_text
 
 LOCK = threading.RLock()
@@ -14,9 +14,13 @@ class ProfileError(ValueError):
     status = 400
 
 
+class ModelCatalogError(ProfileError):
+    status = 502
+
+
 def roles():
     from agent_registry import registry
-    return {'global':'主 Agent / 默认配置',**{a.id:a.title for a in registry.all()}}
+    return {'global':'全局默认配置', 'conversation':'主 Agent', **{a.id:a.title for a in registry.all()}}
 
 
 def canonical(role):
@@ -48,12 +52,12 @@ def defaults(role):
 def read_skill(settings, name, role="global"):
     if name not in available_skills():
         raise ProfileError('没有找到该 Skill。')
-    role = "global" if role == "conversation" else canonical(role)
+    role = canonical(role)
     if role not in roles(): raise ProfileError("没有注册该 Agent。")
     override = settings.data_home/"skill-overrides"/role/(name+".md")
     global_override = settings.data_home/"skill-overrides"/"global"/(name+".md")
     legacy=[]
-    if role!='global':
+    if role not in {'global', 'conversation'}:
         from agent_registry import registry
         legacy=[settings.data_home/'skill-overrides'/old/(name+'.md') for old in registry.get(role).legacy_roles]
     candidates=[override]+legacy+[global_override,SKILLS_DIR/name/'SKILL.md']
@@ -67,6 +71,8 @@ class AgentProfiles:
     def __init__(self, settings):
         self.settings = settings
         self.path = settings.data_home/'agent-profiles.json'
+        self.default_model, self.default_key = getattr(settings, '_profile_defaults',
+            (getattr(settings, 'model', ''), getattr(settings, 'api_key', '')))
 
     def _read(self):
         if not self.path.exists():
@@ -77,26 +83,31 @@ class AgentProfiles:
 
     def secrets(self):
         with LOCK:
-            return [self.settings.api_key] + [v['api_key'] for v in self._read().values() if v.get('api_key')]
+            keys = [self.default_key, getattr(self.settings, 'api_key', '')]
+            keys.extend(v['api_key'] for v in self._read().values() if v.get('api_key'))
+            return list(dict.fromkeys(keys))
 
     def resolve(self, role):
         role=canonical(role)
         if getattr(self.settings, '_profile_role', None) == role:
             return self.settings
-        if role not in roles() and role != 'conversation':
+        if role not in roles():
             raise ProfileError('没有注册这个 Agent。')
         with LOCK:
             profiles = self._read()
-            profile = profile_for(profiles,role) if role != 'conversation' else {}
+            profile = profile_for(profiles,role)
             global_profile = profiles.get('global', {})
             result = copy.copy(self.settings)
             result.provider = profile.get('provider', global_profile.get('provider', 'deepseek'))
-            result.api_key = profile.get('api_key', self.settings.api_key)
-            result.model = profile.get('model', self.settings.model)
+            if result.provider not in PROVIDERS:
+                raise ProfileError('尚未适配该服务商。')
+            result.api_key = profile.get('api_key', self.default_key)
+            result.model = profile.get('model', self.default_model)
             names = list(profile.get('skills', global_profile.get('skills', defaults(role))))
             result.skill_names = tuple(names)
             result.skill_instructions = '\n\n'.join('<skill name="{}">\n{}\n</skill>'.format(name, read_skill(self.settings, name, role)) for name in names)
             result._profile_role = role
+            result._profile_defaults = (self.default_model, self.default_key)
             result._profile_secrets = tuple(self.secrets()) + (result.api_key,)
             result._profile_public = self.public(role, profiles)
             return result
@@ -107,8 +118,8 @@ class AgentProfiles:
         profile = profile_for(profiles,role)
         names = profile.get('skills', profiles.get('global', {}).get('skills', defaults(role)))
         return {'role': role, 'title': roles().get(role, role),
-            'provider': profile.get('provider', profiles.get('global', {}).get('provider', 'deepseek')), 'model': profile.get('model', self.settings.model),
-            'api_key_configured': bool(profile.get('api_key', self.settings.api_key)), 'skills': names,
+            'provider': profile.get('provider', profiles.get('global', {}).get('provider', 'deepseek')), 'model': profile.get('model', self.default_model),
+            'api_key_configured': bool(profile.get('api_key', self.default_key)), 'skills': names,
             'sources': {key: ('independent' if key in profile and role != 'global' else 'default') for key in ('provider','model','api_key','skills')},
             'skill_source': 'independent' if 'skills' in profile else 'global' if 'skills' in profiles.get('global', {}) else 'business_default'}
 
@@ -116,6 +127,19 @@ class AgentProfiles:
         with LOCK:
             data = self._read()
             return {'agents': [self.public(role, data) for role in roles()], 'available_skills': available_skills(), 'providers': list(PROVIDERS)}
+
+    def model_catalog(self, role):
+        settings = self.resolve(role)
+        if not settings.api_key:
+            raise ProfileError('请先保存 API Key，再查询可用模型。')
+        list_models = getattr(create_client(settings, timeout=15), 'list_models', None)
+        if list_models is None:
+            raise ProfileError('该厂商尚未支持查询可用模型，可手动填写模型名称。')
+        try:
+            models = list_models()
+        except RuntimeError as exc:
+            raise ModelCatalogError(redact(settings, exc)) from exc
+        return {'models': [model for model in models if redact(settings, model) == model]}
 
     def update(self, role, body):
         role=canonical(role)
@@ -132,7 +156,7 @@ class AgentProfiles:
                 value = body[key]
                 if key == 'api_key' and value == '': continue
                 if key == 'provider' and value not in PROVIDERS: raise ProfileError('尚未适配该服务商。')
-                if key == 'model' and (not isinstance(value, str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.:/-]{0,99}', value)): raise ProfileError('模型名称格式无效。')
+                if key == 'model' and (not isinstance(value, str) or not MODEL_ID_PATTERN.fullmatch(value)): raise ProfileError('模型名称格式无效。')
                 if key == 'api_key' and (not isinstance(value,str) or len(value)>4096 or any(ord(c)<33 or c in '\"\'' for c in value)): raise ProfileError('API 凭证格式无效。')
                 if key == 'skills' and (not isinstance(value,list) or len(value)>20 or any(name not in available_skills() for name in value)): raise ProfileError('Skills 列表无效。')
                 if role == 'global' and key in {'model','api_key','provider'}: continue
@@ -160,12 +184,25 @@ def resolve_agent(settings, role):
     return AgentProfiles(settings).resolve(role)
 
 
+def execution_profile(settings):
+    """Record the resolved model and rule revision without retaining credentials or rule text."""
+    return {
+        'role': settings._profile_role,
+        'provider': settings.provider,
+        'model': redact(settings, settings.model),
+        'skills': list(settings.skill_names),
+        'skills_sha256': hashlib.sha256(settings.skill_instructions.encode('utf-8')).hexdigest(),
+    }
+
+
 def create_client(settings, timeout=180):
-    return PROVIDERS[getattr(settings, 'provider', 'deepseek')](settings, timeout=timeout)
+    factory = PROVIDERS.get(getattr(settings, 'provider', 'deepseek'))
+    if factory is None:
+        raise ProfileError('尚未适配该服务商。')
+    return factory(settings, timeout=timeout)
 
 
 def redact(settings, value):
     text = str(value)
-    for secret in getattr(settings,'_profile_secrets',(settings.api_key,)):
-        if secret: text = text.replace(secret,'[已隐藏凭证]')
-    return text
+    pattern = secret_pattern(getattr(settings, '_profile_secrets', (settings.api_key,)))
+    return pattern.sub('[已隐藏凭证]', text) if pattern else text

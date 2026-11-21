@@ -1,0 +1,50 @@
+{
+  "date": "2026-11-08",
+  "requirement": "FR-09",
+  "status": "public_pdf_import_clear_passed",
+  "source_page": "https://aclanthology.org/N19-1423/",
+  "source_pdf": "https://aclanthology.org/N19-1423.pdf",
+  "scope": {
+    "real_components": ["AppKit/WKWebView account window", "WKDownload", "loopback HTTP", "task worker", "SQLite", "PDF parsing"],
+    "synthetic_components": ["initial need for authentication or material", "summary output"],
+    "credentials_entered": false,
+    "external_model_called": false
+  },
+  "swift_sha256": "439566e84788edf8ffef8d68fdfb285700d0f53442b46ba91c03ae277d392ea8",
+  "startup": {
+    "native_child_pid": 19715,
+    "observed_delay": "The native child remained unready for over four minutes and was sampled in Python path initialization at getpath_readlines -> __open_nocancel.",
+    "native_child_and_first_app_exited_before_external_start": true,
+    "verified_mode": "Native window attached to an isolated externally started local backend"
+  },
+  "checks": {
+    "return_from_pdf": {
+      "ui": "Back returned to the article. Import requested opening a PDF first.",
+      "task_status": "waiting_user",
+      "attempt": 1,
+      "attachments": 0
+    },
+    "import": {
+      "ui": "The dedicated window reported PDF imported, then the main conversation showed completion and the saved result.",
+      "task_id": "6b64f3a8a72944fcaffcbd549f1385e8",
+      "task_status": "completed",
+      "attempt": 2,
+      "attachments": 1,
+      "pdf_pages": 16,
+      "pdf_sha256": "987545ffb087f1ece898142c403a516baeabeb70ce19089397fac6f7db12c3d4"
+    },
+    "clear": {
+      "ui": "After refreshing session status, the panel showed the cleared message and disabled opening the old session. The saved result remained visible.",
+      "session_id": "df425e26d8944553abc4d0de45eb1e31",
+      "session_status": "cleared",
+      "same_task_and_result_preserved": true,
+      "http_regression": "Late clear_pending or session_saved reports leave cleared unchanged. Import after clear returns HTTP 409."
+    }
+  },
+  "cleanup": {
+    "native_app_exited": true,
+    "external_backend_pid": 20751,
+    "external_backend_exit_code": 0
+  },
+  "remaining": ["Publisher or institution login using a real account", "Entitlement and expiry behavior on a real restricted paper", "Cause of occasional Python path initialization delay"]
+}

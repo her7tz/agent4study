@@ -1,0 +1,21 @@
+{
+  "date": "2026-11-09",
+  "requirements": ["FR-08"],
+  "public_samples": [
+    {"source": "https://aclanthology.org/C65-1006/", "pages": 37, "embedded_hidden_text_pages": 37, "sparse_pages_excluded": [], "sha256": "f3995187136f4042bf1597797d49aa9d70734bd64af9c03caa5867119f3d8379"},
+    {"source": "https://aclanthology.org/C65-1030/", "pages": 35, "embedded_hidden_text_pages": 35, "sparse_pages_excluded": [31], "sha256": "ba459dbe47e605021dedb51f871c8293aadb043615015648809ba74cff1b2e4b"},
+    {"source": "https://aclanthology.org/C67-1009/", "pages": 21, "embedded_hidden_text_pages": 21, "sparse_pages_excluded": [], "sha256": "c93597a63c8dd8d94ad127d77dfddcd44aac95371a7d7591acd52344658b1368"}
+  ],
+  "checks": {
+    "all_three_upload_paths_preserve_original_bytes": true,
+    "normal_public_url_ingestion_matches_original_bytes": true,
+    "visually_checked_page_31_is_a_diagram_with_only_running_header_extracted": true,
+    "removing_hidden_text_in_test_preserved_scan_image_bytes": true,
+    "image_only_test_reports_ocr_limitation": true,
+    "sparse_scan_page_not_sent_as_summary_evidence": true,
+    "report_discloses_embedded_text_and_sparse_page": true,
+    "neighboring_physical_page_numbers_preserved": true
+  },
+  "scope": "Original ACL PDFs and real public-link and upload readers. Summary assembly used a synthetic response. Detection covers invisible text operators in the page content stream and does not validate the accuracy of embedded OCR.",
+  "tests": {"full_suite_passed": 282, "full_suite_skipped": 0}
+}

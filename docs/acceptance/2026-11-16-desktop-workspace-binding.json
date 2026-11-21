@@ -1,0 +1,24 @@
+{
+  "date": "2026-11-16",
+  "requirements": ["FR-01", "NFR-01"],
+  "archive_sha256": "7a25c9b99ef4778853d867ceeb814fcb41ef1082c157d9d00471fcaea714a8aa",
+  "native_executable_sha256": "a162876fbf5965e9296f7d50ead1fa50fa7219753e0abdad680e2b69f95ce2de",
+  "archive_file_count": 4,
+  "strict_signature_after_extraction": true,
+  "configured_credentials_matched_in_archive": 0,
+  "native_workspace_checks": {
+    "scope": "使用 ZIP 提取的桌面程序及独立工作区。为测试端口和目录修改临时副本的 plist 后重新签名。使用真实本机 HTTP 服务和合成会话及成果，不调用外部模型。",
+    "old_native_loaded_foreign_workspace_sharing_output": true,
+    "new_native_loaded_foreign_workspace_sharing_output": false,
+    "new_native_loaded_service_without_data_dir": false,
+    "new_native_loaded_conversations_and_reports_when_matching": true
+  },
+  "launcher_checks": {
+    "scope": "在独立副本重现 Finder 扩展属性，运行正式启动命令。",
+    "directory_bundle_strict_signature_failed": true,
+    "verified_extracted_copy_launched": true,
+    "native_loaded_workspace": true,
+    "second_launch_reused_process": true
+  },
+  "tests": {"full_suite_passed": 330, "full_suite_skipped": 0}
+}

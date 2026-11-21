@@ -1,0 +1,20 @@
+{
+  "date": "2026-11-09",
+  "requirements": ["FR-05"],
+  "scope": "Headless Chrome against the real loopback API and a disposable workspace. The test delayed a Skill GET response by 800 ms and used synthetic credentials. Native WKWebView and live provider calls were outside this run.",
+  "baseline": {
+    "late_paper_rule_displayed_in_video_editor": true,
+    "saving_after_a_skill_switch_overwrote_the_previous_skill": true
+  },
+  "fixed": {
+    "late_read_isolated_by_role": true,
+    "late_read_isolated_by_skill_selection": true,
+    "delayed_profile_panel_does_not_reopen_after_navigation": true,
+    "credentials_not_echoed_in_ui_or_profile_response": true,
+    "configured_and_edited_roles": ["global", "paper_reading", "video_learning", "knowledge_archivist"],
+    "subagent_inheritance_restored": ["video_learning", "paper_reading", "knowledge_archivist"],
+    "video_explicit_empty_skill_list_accepted": true,
+    "private_rule_survives_list_inheritance": true
+  },
+  "tests": {"full_suite_passed": 281, "full_suite_skipped": 0}
+}

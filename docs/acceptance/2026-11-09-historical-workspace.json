@@ -1,0 +1,35 @@
+{
+  "date": "2026-11-09",
+  "requirements": ["FR-17", "NFR-08"],
+  "method": "Read-only copies of seven historical databases and matching local reports. Reports were matched to historical task Markdown before recreating their recorded paths in isolated workspaces. Each copy was opened twice through the current local service.",
+  "original_files_hash_verified_unchanged": 57,
+  "startup_checks_passed": 14,
+  "distinct_counts": {
+    "tasks_by_id": 19,
+    "conversations_by_id": 6,
+    "original_message_rows": 130,
+    "reports_by_content": 9,
+    "assets_by_content": 32,
+    "knowledge_entries_by_id": 16,
+    "archive_documents_by_id": 2
+  },
+  "checks": {
+    "root_level_report_paths_migrated": 4,
+    "old_report_urls_and_artifact_ids_resolved": true,
+    "report_and_attachment_bytes_preserved": true,
+    "message_payloads_and_action_records_preserved": true,
+    "knowledge_source_conversation_ids_message_ids_and_urls_preserved": true,
+    "archive_documents_remained_readable_on_second_start": true,
+    "historical_scheduled_runs_in_backups": 0,
+    "model_requests": 0
+  },
+  "snapshots": [
+    {"era": "pre_desktop", "tasks": 5, "conversations": 0, "message_rows": 0, "reports": 3, "http_assets": 19, "knowledge_entries": 0, "archives": 0},
+    {"era": "pre_general_agent", "tasks": 5, "conversations": 2, "message_rows": 4, "reports": 0, "http_assets": 0, "knowledge_entries": 0, "archives": 0},
+    {"era": "pre_knowledge_archive", "tasks": 5, "conversations": 2, "message_rows": 6, "reports": 0, "http_assets": 0, "knowledge_entries": 0, "archives": 0},
+    {"era": "pre_paper", "tasks": 6, "conversations": 2, "message_rows": 23, "reports": 1, "http_assets": 0, "knowledge_entries": 6, "archives": 1},
+    {"era": "pre_0_6", "tasks": 10, "conversations": 3, "message_rows": 27, "reports": 2, "http_assets": 0, "knowledge_entries": 16, "archives": 2},
+    {"era": "pre_agent_console", "tasks": 11, "conversations": 5, "message_rows": 46, "reports": 3, "http_assets": 1, "knowledge_entries": 16, "archives": 2},
+    {"era": "pre_share_knowledge", "tasks": 19, "conversations": 6, "message_rows": 128, "reports": 3, "http_assets": 15, "knowledge_entries": 16, "archives": 2}
+  ]
+}

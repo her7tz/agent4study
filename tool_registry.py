@@ -29,6 +29,9 @@ class ToolRegistry:
     def metadata(self):
         return [tool.metadata() for tool in self._tools.values()]
 
+    def __contains__(self, name):
+        return name in self._tools
+
     def call(self, name, arguments, context):
         from capabilities import _validate_schema
         tool = self._tools.get(name)

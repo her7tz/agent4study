@@ -1,0 +1,14 @@
+{
+  "date": "2026-11-10",
+  "requirements": ["FR-05", "FR-14", "NFR-01"],
+  "baseline_persisted_fixture_credential_in_progress": true,
+  "checks": {
+    "standalone_cli_progress_failure_notification_and_logs_redacted": true,
+    "workbench_task_and_schedule_records_use_same_diagnostics": true,
+    "credential_rotation_during_execution_redacts_original_key": true,
+    "overlapping_key_prefixes_fully_redacted": true,
+    "exception_cause_and_stack_remain_available": true
+  },
+  "scope": "Actual CLI and workbench scheduling code with disposable SQLite, fixture credentials, synthetic errors and a notification substitute.",
+  "tests": {"full_suite_passed": 291, "scheduler_diagnostics_targeted_passed": 51, "python_3_9_syntax": true}
+}

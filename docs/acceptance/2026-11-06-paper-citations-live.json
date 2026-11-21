@@ -1,0 +1,78 @@
+{
+  "date": "2026-11-06",
+  "status": "citation_mapping_passed_content_needs_revision",
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "seconds": 116.0,
+  "input": "Two-page public arXiv PDF excerpt; original physical pages 6 and 9",
+  "citation_page_basis": "Physical pages 1 and 2 of the supplied excerpt PDF",
+  "report": ".local/acceptance/paper-citations-20261106/paper_summary/paper_summary_20261106-172836_280b6218.md",
+  "labels": [
+    {
+      "unit_id": "k1",
+      "pdf_pages": [
+        1
+      ]
+    },
+    {
+      "unit_id": "k2",
+      "pdf_pages": [
+        1,
+        2
+      ]
+    },
+    {
+      "unit_id": "k3",
+      "pdf_pages": [
+        2
+      ]
+    },
+    {
+      "unit_id": "k4",
+      "pdf_pages": [
+        2
+      ]
+    },
+    {
+      "unit_id": "k5",
+      "pdf_pages": [
+        2
+      ]
+    },
+    {
+      "unit_id": "k6",
+      "pdf_pages": [
+        2
+      ]
+    },
+    {
+      "unit_id": "k7",
+      "pdf_pages": [
+        1,
+        2
+      ]
+    }
+  ],
+  "summary_processing": {
+    "version": 1,
+    "source_blocks": 2,
+    "source_characters": 9136,
+    "chunks": 1,
+    "merge_passes": 1,
+    "model_calls": 2,
+    "all_chunks_processed": true,
+    "checks": "structure_source_ids_and_declared_coverage_only",
+    "rendered_units": 7,
+    "rendering_check": "inline_and_declared_unit_ids"
+  },
+  "quality_review": {
+    "method": "Manual comparison of saved units and final report with supplied PDF excerpt",
+    "citation_check": "Position encoding combines source pages 1 and 2; ablation sections reference page 2",
+    "ablation_attribution": "The previous blanket multi-factor warning did not recur in this excerpt run",
+    "remaining_issues": [
+      "Section IV groups PPL 5.16/5.01 with lower BLEU and parameter counts as all lower than baseline PPL 4.92; PPL is actually higher",
+      "The big row describes blank d_k, d_v and epsilon_ls as unlisted but does not apply the table caption stating unlisted values inherit the base model"
+    ]
+  },
+  "limitation": "Reader-derived page mapping passed for this excerpt. The remaining content issues prevent overall quality acceptance; citation validity is not factual verification."
+}

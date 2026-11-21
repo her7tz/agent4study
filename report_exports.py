@@ -4,17 +4,16 @@ Archive paths mirror the output directory so relative Markdown image links
 continue to work after extraction, including reports stored in subdirectories.
 """
 
-import html
 import os
 import posixpath
-import re
 import stat
 import tempfile
 import urllib.parse
 import zipfile
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
-from typing import BinaryIO, Dict, Iterator, Optional
+from typing import BinaryIO, Iterator, Optional
 
 
 MAX_EXPORT_FILE_BYTES = 32 * 1024 * 1024
@@ -84,100 +83,50 @@ def _read_file(root_fd: int, relative: str) -> bytes:
         os.close(directory_fd)
 
 
-def _destination(text: str, start: int) -> Optional[str]:
-    """Read a Markdown link destination, preserving balanced parentheses."""
-    while start < len(text) and text[start].isspace():
-        start += 1
-    if start >= len(text):
-        return None
-    if text[start] == "<":
-        end = start + 1
-        while end < len(text):
-            if text[end] == "\\":
-                end += 2
-                continue
-            if text[end] == ">":
-                return text[start + 1:end]
-            if text[end] in "\r\n":
-                return None
-            end += 1
-        return None
-    end = start
-    depth = 0
-    while end < len(text):
-        char = text[end]
-        if char == "\\":
-            end += 2
-            continue
-        if char == "(":
-            depth += 1
-        elif char == ")":
-            if depth == 0:
-                break
-            depth -= 1
-        elif char.isspace() and depth == 0:
-            break
-        end += 1
-    return text[start:end] or None
+class _HTMLImages(HTMLParser):
+    """Keep the legacy support for image tags without rendering document HTML."""
+
+    def __init__(self):
+        super().__init__()
+        self.sources = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "img":
+            source = next((value for name, value in attrs if name == "src"), None)
+            if source:
+                self.sources.append(source)
 
 
-def _label(value: str) -> str:
-    return " ".join(value.split()).casefold()
+def _markdown_resources(markdown: str) -> Iterator[tuple[str, str]]:
+    try:
+        from markdown_it import MarkdownIt
+    except ImportError as exc:
+        raise ExportError(503, "Markdown 导出组件未安装，请运行配置运行环境后重试。") from exc
+
+    parser = MarkdownIt("commonmark").enable(["table", "strikethrough"])
+    for block in parser.parse(markdown):
+        for token in block.children or (block,):
+            if token.type == "image":
+                yield "image", token.attrGet("src")
+            elif token.type == "link_open":
+                yield "link", token.attrGet("href")
+            elif token.type in {"html_inline", "html_block"}:
+                html_images = _HTMLImages()
+                html_images.feed(token.content)
+                for source in html_images.sources:
+                    yield "image", source
 
 
-def _bracket_end(text: str, start: int) -> Optional[int]:
-    """Locate a label's closing bracket, allowing nested and escaped brackets."""
-    depth = 1
-    cursor = start + 1
-    while cursor < len(text):
-        char = text[cursor]
-        if char == "\\":
-            cursor += 2
-            continue
-        if char == "[":
-            depth += 1
-        elif char == "]":
-            depth -= 1
-            if depth == 0:
-                return cursor
-        cursor += 1
-    return None
+def _markdown_destinations(markdown: str, *, images: bool) -> Iterator[str]:
+    kind = "image" if images else "link"
+    return (destination for resource, destination in _markdown_resources(markdown) if resource == kind)
 
 
 def _image_destinations(markdown: str) -> Iterator[str]:
-    # Code examples are not image references in the rendered report.
-    text = re.sub(r"(?ms)^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?^ {0,3}\1[ \t]*$", "", markdown)
-    text = re.sub(r"(`+)[^`]*?\1", "", text)
-    references: Dict[str, str] = {}
-    for match in re.finditer(r"(?m)^ {0,3}\[([^\]\r\n]+)\]:[ \t]*", text):
-        destination = _destination(text, match.end())
-        if destination:
-            references.setdefault(_label(match.group(1)), destination)
-    for match in re.finditer(r"!\[", text):
-        closing = _bracket_end(text, match.end() - 1)
-        if closing is None:
-            continue
-        alt = text[match.end():closing]
-        end = closing + 1
-        if text[end:end + 1] == "(":
-            destination = _destination(text, end + 1)
-        elif text[end:end + 1] == "[":
-            reference_end = _bracket_end(text, end)
-            reference = text[end + 1:reference_end] if reference_end is not None else ""
-            destination = references.get(_label(reference or alt)) if reference_end is not None else None
-        else:
-            destination = references.get(_label(alt))
-        if destination:
-            yield destination
-    for match in re.finditer(
-        r"<img\b[^>]*\bsrc\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))",
-        text, re.IGNORECASE,
-    ):
-        yield next(value for value in match.groups() if value is not None)
+    return _markdown_destinations(markdown, images=True)
 
 
 def _image_path(destination: str, report: str) -> Optional[str]:
-    destination = html.unescape(re.sub(r"\\([!\"#$%&'()*+,\-./:;<=>?@\[\]^_`{|}~])", r"\1", destination))
     try:
         url = urllib.parse.urlsplit(destination)
     except ValueError as exc:
@@ -195,6 +144,22 @@ def _image_path(destination: str, report: str) -> Optional[str]:
     return relative
 
 
+def _report_companions(links: Iterator[str], report: str) -> Iterator[str]:
+    assets = PurePosixPath(report).stem + "_assets"
+    allowed = {assets + "/original.pdf", assets + "/source-evidence.json",
+               assets + "/presentation.pptx", assets + "/presentation-plan.json"}
+    for destination in links:
+        try:
+            url = urllib.parse.urlsplit(destination)
+        except ValueError:
+            continue
+        if url.scheme or url.netloc:
+            continue
+        relative = posixpath.normpath(urllib.parse.unquote(url.path))
+        if relative in allowed:
+            yield posixpath.join(posixpath.dirname(report), relative)
+
+
 def _is_image(contents: bytes, suffix: str) -> bool:
     if suffix in {".jpg", ".jpeg"}:
         return contents.startswith(b"\xff\xd8\xff")
@@ -206,7 +171,7 @@ def _is_image(contents: bytes, suffix: str) -> bool:
 
 
 def build_report_archive(output_dir: Path, report_relative: str) -> ReportArchive:
-    """Build a bounded ZIP containing one report and only its referenced images."""
+    """Build a bounded ZIP containing a report and its referenced local resources."""
     report = _relative_path(report_relative)
     if PurePosixPath(report).suffix.lower() != ".md":
         raise ExportError(400, "请选择 Markdown 总结文件进行导出。")
@@ -215,18 +180,23 @@ def build_report_archive(output_dir: Path, report_relative: str) -> ReportArchiv
         root_fd = os.open(str(root), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     except OSError as exc:
         raise ExportError(404, "总结目录不存在或无法读取。") from exc
-    stream = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b")
+    # Python 3.9's spooled file lacks the BinaryIO seekable method used by
+    # ZipFile readers. A temporary binary file supports the same export API.
+    stream = tempfile.TemporaryFile(mode="w+b")
     try:
         report_data = _read_file(root_fd, report)
         try:
             markdown = report_data.decode("utf-8-sig")
         except UnicodeDecodeError as exc:
             raise ExportError(400, "总结文件不是有效的 UTF-8 文档。") from exc
+        images, links = [], []
+        for kind, destination in _markdown_resources(markdown):
+            (images if kind == "image" else links).append(destination)
         total = len(report_data)
         seen = {report}
         with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             archive.writestr(report, report_data)
-            for destination in _image_destinations(markdown):
+            for destination in images:
                 image = _image_path(destination, report)
                 if image is None or image in seen:
                     continue
@@ -240,15 +210,17 @@ def build_report_archive(output_dir: Path, report_relative: str) -> ReportArchiv
                     raise ExportError(413, "报告与图片的总大小不能超过 128 MB。")
                 archive.writestr(image, data)
                 seen.add(image)
-            # A paper original is a fixed companion asset, never an arbitrary linked file.
-            pdf_reference=PurePosixPath(report).stem+"_assets/original.pdf"
-            if "("+pdf_reference+")" in markdown:
-                pdf=posixpath.join(posixpath.dirname(report),pdf_reference)
-                data=_read_file(root_fd,_relative_path(pdf))
-                if not data[:1024].lstrip().startswith(b"%PDF-"):raise ExportError(400,"原始论文文件不是有效 PDF。")
-                total+=len(data)
-                if total>MAX_EXPORT_BYTES or len(seen)>=MAX_EXPORT_FILES:raise ExportError(413,"导出材料超过大小或文件数限制。")
-                archive.writestr(pdf,data)
+            for companion in _report_companions(iter(links), report):
+                if companion in seen:
+                    continue
+                data = _read_file(root_fd, _relative_path(companion))
+                if companion.endswith("/original.pdf") and not data[:1024].lstrip().startswith(b"%PDF-"):
+                    raise ExportError(400, "原始论文文件不是有效 PDF。")
+                total += len(data)
+                if total > MAX_EXPORT_BYTES or len(seen) >= MAX_EXPORT_FILES:
+                    raise ExportError(413, "导出材料超过大小或文件数限制。")
+                archive.writestr(companion, data)
+                seen.add(companion)
         size = stream.tell()
         if size > MAX_EXPORT_BYTES:
             raise ExportError(413, "导出文件不能超过 128 MB。")

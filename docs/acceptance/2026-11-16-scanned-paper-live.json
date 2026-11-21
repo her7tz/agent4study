@@ -1,0 +1,37 @@
+{
+  "date": "2026-11-16",
+  "requirements": ["FR-06", "FR-08"],
+  "source": "https://aclanthology.org/C65-1030.pdf",
+  "original_sha256": "ba459dbe47e605021dedb51f871c8293aadb043615015648809ba74cff1b2e4b",
+  "scope": "实际 Agent HTTP 任务通过公开 PDF 链接读取材料，并在临时工作区用配置的 DeepSeek 完成复验。只使用公开论文，无个人材料。",
+  "before": {
+    "fragmented_diagram_pages_admitted": [4, 23, 34],
+    "sparse_pages_excluded": [31],
+    "task_status": "failed",
+    "failure_stage": "对照完整原文核对知识",
+    "failure_reason": "补充依据未通过来源和逐字引文校验。"
+  },
+  "after_reader_fix": {
+    "elapsed_seconds": 325.4,
+    "physical_pages": 35,
+    "pages_containing_invisible_text": 35,
+    "sparse_pages_excluded": [31],
+    "fragmented_pages_excluded": [4, 23, 34],
+    "visually_checked_excluded_pages": [4, 23, 31, 34],
+    "source_blocks": 31,
+    "knowledge_units": 13,
+    "all_citations_match_preserved_physical_pages": true,
+    "material_range_discloses_invisible_text_and_no_visual_review": true,
+    "zip_files_matching_saved_bytes": 3,
+    "original_pdf_matches_official_bytes": true,
+    "other_scans_retained_physical_pages": {"C65-1006": 37, "C67-1009": 21}
+  },
+  "additional_support_recovery": {
+    "scope": "使用合成模型回执复验。真实成稿运行在引文纠正机制加入之前。",
+    "reuse_same_original_material": true,
+    "retry_limit_per_review_batch": 1,
+    "corrected_quote_passed": true,
+    "persistently_invalid_quotes_stop": true
+  },
+  "tests": {"full_suite_passed": 333, "full_suite_skipped": 0, "paper_targeted_passed": 30, "source_review_passed": 15}
+}

@@ -1,0 +1,14 @@
+{
+  "date": "2026-11-10",
+  "requirements": ["FR-09", "FR-13", "FR-14"],
+  "baseline_failures": ["Rejected PDF had already marked the session imported", "Late browser state overwrote an accepted import"],
+  "checks": {
+    "cancelled_occurrence_rejects_late_pdf_without_new_attachment": true,
+    "cancel_after_file_save_discards_unattached_copy": true,
+    "two_concurrent_requests_create_one_task_and_one_attachment": true,
+    "browser_state_cannot_mark_or_overwrite_import": true,
+    "accepted_scheduled_import_continues_original_occurrence": true
+  },
+  "scope": "Real loopback API, temporary SQLite, synthetic PDF and no external account sign-in.",
+  "tests": {"full_suite_passed": 302, "http_targeted_passed": 5, "paper_targeted_passed": 26, "python_3_9_syntax": true}
+}

@@ -1,0 +1,44 @@
+{
+  "date": "2026-11-06",
+  "status": "passed",
+  "seconds": 59.1,
+  "model": "deepseek-flash",
+  "input": "Two synthetic public algorithm materials; no personal data",
+  "overlap": {
+    "seconds": 4.257,
+    "task_ids": [
+      "38fc9eb8b23f4e2d9f960bce840aab28",
+      "ec250ecd95dc48aaaf3615f9d06bee32"
+    ],
+    "pool": {
+      "limit": 4,
+      "active": 2,
+      "queued": 0
+    }
+  },
+  "tasks": [
+    {
+      "id": "38fc9eb8b23f4e2d9f960bce840aab28",
+      "agent_id": "paper_reading",
+      "group_id": "13c577a2c9da4ba5bc3f6661d64a0deb",
+      "status": "completed",
+      "output_file": "paper_summary/paper_summary_20261106-142329_af788cc8.md",
+      "created_at": 1793946163.8155909,
+      "finished_at": 1793946212.109757
+    },
+    {
+      "id": "ec250ecd95dc48aaaf3615f9d06bee32",
+      "agent_id": "paper_reading",
+      "group_id": "13c577a2c9da4ba5bc3f6661d64a0deb",
+      "status": "completed",
+      "output_file": "paper_summary/paper_summary_20261106-142334_399a7d6d.md",
+      "created_at": 1793946163.8118038,
+      "finished_at": 1793946218.6323829
+    }
+  ],
+  "distinct_sources_and_outputs": true,
+  "origin_chat_delivery_ids": [
+    "38fc9eb8b23f4e2d9f960bce840aab28",
+    "ec250ecd95dc48aaaf3615f9d06bee32"
+  ]
+}

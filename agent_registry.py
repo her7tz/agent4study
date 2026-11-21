@@ -40,6 +40,7 @@ class SubagentRegistry:
         with self._lock:
             if not re.fullmatch(r'[a-z][a-z0-9_]{0,47}',agent.id) or agent.id in self._agents:raise ValueError('Subagent 编号无效或已注册。')
             names={name for item in self._agents.values() for name in (item.id,*item.legacy_roles)}
+            names.update({'global', 'conversation'})
             if len(set((agent.id,*agent.legacy_roles)))!=1+len(agent.legacy_roles) or names.intersection((agent.id,*agent.legacy_roles)):raise ValueError('Subagent 编号或兼容别名重复。')
             if agent.page and (not re.fullmatch(r'[a-z][a-z0-9_]{0,63}',agent.page) or agent.page in {'chat','knowledge','library','schedules','history','settings'}):raise ValueError('Subagent 页面编号无效。')
             if any((item.page or 'agent_'+item.id)==(agent.page or 'agent_'+agent.id) for item in self._agents.values()):raise ValueError('Subagent 页面已注册。')

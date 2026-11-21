@@ -1,0 +1,27 @@
+{
+  "date": "2026-11-09",
+  "requirements": ["FR-16"],
+  "method": "Two loopback HTTP services running the Agent API and the actual Study Log route handlers. The site used current SQLite migrations and simulated authenticated Sites headers for two independent test accounts.",
+  "isolated_pairing": {
+    "grants_created_and_revoked": 2,
+    "pending_read_status": 401,
+    "unauthenticated_approval_status": 401,
+    "second_account_approval_status": 409,
+    "wrong_account_revoke_status": 404,
+    "approved_read_resources": ["records", "projects", "analytics"],
+    "record_pagination_and_account_isolation": true,
+    "site_revoke_then_old_token_read_status": 401,
+    "agent_revoke_then_old_token_read_status": 401,
+    "revocation_transport_error_kept_local_credential": true,
+    "successful_revoke_cleared_local_credential": true,
+    "learning_data_unchanged": true
+  },
+  "deployed_anonymous_probe": {
+    "requests": 5,
+    "statuses": [403, 403, 403, 403, 403],
+    "response_type": "text/html",
+    "verified_application_authorization_response": false
+  },
+  "tests": {"agent_study_log_checks_passed": 18, "site_authorization_checks_passed": 4},
+  "limits": "The deployed site probe used only anonymous GETs. Deployed login, first pairing and revocation require separate authenticated acceptance. No personal records, real credentials, or model calls were used in this run."
+}

@@ -12,9 +12,9 @@ import unicodedata
 import uuid
 from pathlib import Path
 
-from harness import DeepSeekClient
+from agent_profiles import create_client
 from runtime_control import CancellationToken, RunCancelled
-from storage_layout import feature_directory, atomic_text
+from storage_layout import feature_directory, publish_archive
 from summary_engine import SourceBlock, SummaryEngine
 from urllib.parse import quote
 
@@ -270,10 +270,14 @@ class KnowledgeService:
                 finished_at REAL,error TEXT,result TEXT,UNIQUE(conversation_id,fingerprint))""")
             columns = {row["name"] for row in db.execute("PRAGMA table_info(knowledge_ingestions)")}
             for name, definition in {"source_type": "TEXT NOT NULL DEFAULT 'conversation'",
-                    "source_url": "TEXT NOT NULL DEFAULT ''", "source_title": "TEXT NOT NULL DEFAULT ''"}.items():
+                    "source_url": "TEXT NOT NULL DEFAULT ''", "source_title": "TEXT NOT NULL DEFAULT ''",
+                    "extracted_points": "TEXT"}.items():
                 if name not in columns:
                     db.execute("ALTER TABLE knowledge_ingestions ADD COLUMN " + name + " " + definition)
-            db.execute("UPDATE knowledge_ingestions SET status='interrupted',stage='服务重启，知识提取已中断',finished_at=? WHERE status IN ('queued','running')", (time.time(),))
+            db.execute("""UPDATE knowledge_ingestions SET status='interrupted',finished_at=?,
+                stage=CASE WHEN extracted_points IS NULL THEN '服务重启，知识整理已中断'
+                           ELSE '服务重启，知识已提取，可重试保存' END
+                WHERE status IN ('queued','running')""", (time.time(),))
         self._backfill_documents()
         threading.Thread(target=self._worker, daemon=True, name="conversation-knowledge").start()
 
@@ -288,6 +292,7 @@ class KnowledgeService:
             return None
         job = dict(row)
         job.pop("snapshot", None)
+        job.pop("extracted_points", None)
         job["result"] = json.loads(job["result"]) if job.get("result") else None
         return job
 
@@ -338,7 +343,7 @@ class KnowledgeService:
             parts.extend([("分享文字来源：消息 " if document["source_type"] == "chatgpt_share" else "对话来源：消息 ") + "、".join(map(str, point.get("message_ids", []))), ""])
             if point.get("source_urls"):
                 parts.extend(["来源链接：", "", *["- [资料 {}]({})".format(n, url) for n, url in enumerate(point["source_urls"], 1)], ""])
-        atomic_text(path, "\n".join(parts).rstrip() + "\n")
+        publish_archive(path, "\n".join(parts).rstrip() + "\n")
         relative = path.relative_to(settings.output_dir.resolve()).as_posix()
         return {**result, "document": {"title": title + " · 知识归档", "name": relative,
             "artifact_id": hashlib.sha256(relative.encode()).hexdigest()[:16], "url": "/outputs/" + quote(relative, safe="/")}}
@@ -393,7 +398,10 @@ class KnowledgeService:
                 if row and row["status"] in {"queued", "running", "completed"}:
                     return self._job(row)
                 job_id = row["id"] if row else uuid.uuid4().hex
-                db.execute("INSERT INTO knowledge_ingestions(id,conversation_id,fingerprint,snapshot,status,stage,created_at,source_type,source_url,source_title) VALUES(?,?,?,?,'queued','等待提取知识',?,?,?,?) ON CONFLICT(id) DO UPDATE SET status='queued',stage='等待提取知识',snapshot=excluded.snapshot,error=NULL,finished_at=NULL,result=NULL",
+                db.execute("""INSERT INTO knowledge_ingestions(id,conversation_id,fingerprint,snapshot,status,stage,created_at,source_type,source_url,source_title)
+                    VALUES(?,?,?,?,'queued','等待提取知识',?,?,?,?) ON CONFLICT(id) DO UPDATE SET status='queued',stage='等待提取知识',
+                    snapshot=CASE WHEN knowledge_ingestions.extracted_points IS NULL THEN excluded.snapshot ELSE knowledge_ingestions.snapshot END,
+                    error=NULL,finished_at=NULL,result=NULL""",
                     (job_id, snapshot["conversation_id"], fingerprint, json.dumps(snapshot, ensure_ascii=False), time.time(),
                         snapshot.get("source_type", "conversation"), snapshot.get("source_url", ""), snapshot.get("source_title", snapshot.get("title", ""))))
             self.tokens[job_id] = CancellationToken()
@@ -426,12 +434,14 @@ class KnowledgeService:
         if sum(len(message["content"]) for message in snapshot["messages"]) > 300000:
             raise RuntimeError("对话超过本次提取的 30 万字上限，请分成较小的对话再整理。")
         blocks, message_ids = [], {}
+        seen = set()
         for message in snapshot["messages"]:
             message_id = message["id"]
-            if type(message_id) is not int or message_id < 1 or str(message_id) in message_ids:
+            if type(message_id) is not int or message_id < 1 or message_id in seen:
                 raise RuntimeError("对话消息编号无效或重复，未写入知识库。")
-            message_ids[str(message_id)] = message_id
-            if message["content"].strip():
+            seen.add(message_id)
+            if message.get("has_readable_text", True) and message["content"].strip():
+                message_ids[str(message_id)] = message_id
                 blocks.append(SourceBlock(id=str(message_id), text=message["content"],
                     locator={"message_id": message_id, "role": message["role"]}))
         skill = settings.skill_instructions + "\n\n" + (
@@ -445,7 +455,7 @@ class KnowledgeService:
         )
         from capabilities import CapabilityContext
         from harness_runtime import SharedHarness
-        shared = SharedHarness(CapabilityContext(settings, logger=self.logger, client=DeepSeekClient(settings, timeout=120), cancellation=token, progress=progress), "conversation_knowledge")
+        shared = SharedHarness(CapabilityContext(settings, logger=self.logger, client=create_client(settings, timeout=120), cancellation=token, progress=progress), "conversation_knowledge")
         token.check()
         allowed_urls = set(snapshot.get("source_urls", []))
         details = snapshot.get("source_details", {})
@@ -546,19 +556,24 @@ class KnowledgeService:
             token = self.tokens.get(job_id)
         job_secrets = []
         snapshot = {}
+        saving = False
         try:
             if token is None:
                 return
             token.check()
             with self.connect() as db:
-                row = db.execute("SELECT snapshot FROM knowledge_ingestions WHERE id=?", (job_id,)).fetchone()
-            snapshot = json.loads(row[0])
-            from agent_profiles import resolve_agent
-            settings = resolve_agent(self.settings_provider(),"conversation_knowledge")
-            job_secrets = list(settings._profile_secrets) + [settings.api_key]
-            self._update(job_id, status="running", stage="开始提取知识")
+                row = db.execute("SELECT snapshot,extracted_points FROM knowledge_ingestions WHERE id=?", (job_id,)).fetchone()
+            snapshot = json.loads(row["snapshot"])
+            extracted_points = row["extracted_points"]
             result = self.store.batch(job_id)
-            if result is None:
+            saving = result is not None or extracted_points is not None
+            self._update(job_id, status="running", stage="正在保存知识整理结果" if saving else "开始提取知识")
+            if not saving:
+                from agent_profiles import resolve_agent
+                defaults = self.settings_provider()
+                job_secrets = [defaults.api_key]
+                settings = resolve_agent(defaults, "conversation_knowledge")
+                job_secrets = list(settings._profile_secrets) + [settings.api_key]
                 if snapshot.get("source_type") == "chatgpt_share":
                     if not settings.api_key:
                         raise RuntimeError("请先配置知识整理 Agent 的模型 API Key，再重试知识整理。")
@@ -570,33 +585,44 @@ class KnowledgeService:
                     self._update(job_id, snapshot=json.dumps(snapshot, ensure_ascii=False), source_title=shared_snapshot["source_title"])
                 points = self._extract(snapshot, token, lambda stage: self._update(job_id, stage=stage), settings)
                 token.check()
-                result = self.store.ingest(job_id, snapshot, points)
+                extracted_points = json.dumps(points, ensure_ascii=False)
+                self._update(job_id, snapshot=json.dumps(snapshot, ensure_ascii=False),
+                             extracted_points=extracted_points, stage="正在保存知识整理结果")
+                saving = True
+            if result is None:
+                token.check()
+                result = self.store.ingest(job_id, snapshot, json.loads(extracted_points))
             token.check()
             result = self._write_document(job_id, result)
             stage = "已保存 1 份归档文档，整理 {} 条知识".format(result["count"]) if result["count"] else "未发现可复用的知识点，归档已保留"
-            self._update(job_id, status="completed", stage=stage, result=json.dumps(result), finished_at=time.time(), error=None)
+            self._update(job_id, status="completed", stage=stage, result=json.dumps(result),
+                         extracted_points=None, finished_at=time.time(), error=None)
             if snapshot.get("source_type") == "chatgpt_share":
                 from harness import notify_local
                 notify_local("分享知识整理已完成", "已保存 1 份归档文档，整理 {} 条知识。".format(result["count"]), self.logger)
         except RunCancelled:
-            self._update(job_id, status="interrupted", stage="知识提取已中断，可重试", finished_at=time.time())
+            stage = "保存已中断，知识已提取，可重试保存" if saving else "知识提取已中断，可重试"
+            self._update(job_id, status="interrupted", stage=stage, finished_at=time.time())
         except Exception as exc:
-            from agent_profiles import AgentProfiles
-            secrets = AgentProfiles(self.settings_provider()).secrets()
+            from harness import secret_pattern
+            pattern = secret_pattern(job_secrets)
             detail = str(exc)
-            for value in secrets + job_secrets:
-                if value:
-                    detail = detail.replace(value, "[已隐藏凭证]")
-            stage = "分享知识整理失败，尚未完成知识归档" if snapshot.get("source_type") == "chatgpt_share" else "知识提取失败，归档仍保留"
+            if pattern:
+                detail = pattern.sub("[已隐藏凭证]", detail)
+            if saving:
+                stage = "保存失败，知识已提取，可重试保存"
+            else:
+                stage = "分享知识整理失败，尚未完成知识归档" if snapshot.get("source_type") == "chatgpt_share" else "知识提取失败，归档仍保留"
             self._update(job_id, status="failed", stage=stage, error=detail[:1200], finished_at=time.time())
             if self.logger:
-                self.logger.error("知识提取 %s 失败：%s", job_id, detail[:1200])
+                self.logger.error("知识整理 %s 失败：%s", job_id, detail[:1200])
             if snapshot.get("source_type") == "chatgpt_share":
                 from harness import notify_local
                 notify_local("分享知识整理失败", "请在知识整理页面查看原因并重试。", self.logger)
         finally:
             with self.lock:
-                self.tokens.pop(job_id, None)
+                if self.tokens.get(job_id) is token:
+                    self.tokens.pop(job_id, None)
 
 
 

@@ -1,0 +1,92 @@
+{
+  "date": "2026-11-09",
+  "scope": "live workbench WebSources searches with public queries; no model, no accounts",
+  "cases": [
+    {
+      "id": "python_constrained",
+      "query": "Python asyncio TaskGroup official documentation",
+      "site": "docs.python.org",
+      "required_terms": [
+        "asyncio"
+      ],
+      "attempts": [
+        {
+          "provider": "Bing",
+          "status": "no_match"
+        },
+        {
+          "provider": "DuckDuckGo",
+          "status": "error",
+          "error": "timed out"
+        }
+      ],
+      "results": [],
+      "scope_before_read": "联网读取范围：本轮没有取得网页正文，无法据此核实结论。",
+      "candidate_found": false
+    },
+    {
+      "id": "python_refined",
+      "query": "asyncio TaskGroup Python documentation",
+      "site": "docs.python.org",
+      "required_terms": [
+        "asyncio"
+      ],
+      "attempts": [
+        {
+          "provider": "Bing",
+          "status": "matched"
+        }
+      ],
+      "results": [
+        {
+          "provider": "Bing",
+          "title": "asyncio — Asynchronous I/O — Python 3.15.2 documentation",
+          "url": "https://docs.python.org/3/library/asyncio.html"
+        },
+        {
+          "provider": "Bing",
+          "title": "asyncio 的概念介绍 — Python 3.15.2 文档",
+          "url": "https://docs.python.org/zh-cn/3/howto/a-conceptual-overview-of-asyncio.html"
+        }
+      ],
+      "scope_before_read": "联网读取范围：本轮没有取得网页正文，无法据此核实结论。",
+      "candidate_found": true,
+      "first_read": {
+        "url": "https://docs.python.org/3/library/asyncio.html",
+        "title": "asyncio — Asynchronous I/O — Python 3.15.2 documentation",
+        "kind": "page",
+        "read_chars": 2400,
+        "available_chars": 3662
+      },
+      "followed_link": {
+        "url": "https://docs.python.org/3/library/asyncio-task.html",
+        "title": "Coroutines and tasks — Python 3.15.2 documentation",
+        "kind": "page",
+        "read_chars": 2400,
+        "available_chars": 44097
+      }
+    },
+    {
+      "id": "ase_constrained",
+      "query": "IEEE ACM Automated Software Engineering conference ASE 2026",
+      "site": "conf.researchr.org",
+      "required_terms": [
+        "ASE"
+      ],
+      "attempts": [
+        {
+          "provider": "Bing",
+          "status": "no_match"
+        },
+        {
+          "provider": "DuckDuckGo",
+          "status": "error",
+          "error": "timed out"
+        }
+      ],
+      "results": [],
+      "scope_before_read": "联网读取范围：本轮没有取得网页正文，无法据此核实结论。",
+      "candidate_found": false
+    }
+  ]
+}
